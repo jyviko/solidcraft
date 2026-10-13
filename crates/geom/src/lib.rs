@@ -15,6 +15,7 @@ pub mod fill;
 mod mesh;
 mod plane;
 mod profile;
+pub mod tess;
 pub mod tspline;
 mod vec;
 
