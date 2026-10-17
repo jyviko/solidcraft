@@ -124,6 +124,14 @@ Changes:
   non-periodic domain are rejected (a hinted B-spline search can run off and extrapolate to
   thousands of parameter units, and meshing that grid never finishes); the last-resort nearest
   search is clamped into the domain.
+- `tessellation/triangulation.rs`: a boundary point whose hinted search lands outside a surface's
+  bounded, non-periodic domain is searched again from the parameter clamped into it and then
+  without a hint, and the first answer inside the domain that fits the point as well is taken
+  (`in_domain_again`). A B-spline's extrapolation can pass through the point too (a planar one
+  always does), and from a singular corner (two sides meeting at 180°) the walk ran onto it and
+  meshed the face over several times its area (#763). At most two more searches, only for points
+  that left the domain; a plane's single preimage is kept. `crates/kernel/src/boundary_network.rs`
+  (`a_patch_with_straight_corners_measures_its_own_area`) holds it.
 - `tessellation/triangulation.rs`, bounded work (hostile files must not hang): edge polylines
   and surface grids come from our own bounded divisions (at most 20 000 points per edge, a
   grid budget per face shared out of 10 million points per shell, 24 refinement rounds; a

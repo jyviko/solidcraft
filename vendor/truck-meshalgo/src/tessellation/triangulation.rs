@@ -89,6 +89,33 @@ fn sane<S: ParametricSurface3D>(surface: &S, point: Point3, uv: (f64, f64)) -> (
     best
 }
 
+/// SolidCraft: a hinted search that left the surface's bounded domain, searched again from the
+/// parameter clamped into it and then without a hint; the first answer inside the domain that
+/// fits the point as well wins, else the first answer stands. A B-spline's extrapolation past its
+/// domain can pass through the boundary point too (a planar one always does), and from a hint at
+/// a singular corner (a side meeting the next at 180°) Newton's method can run onto that
+/// extrapolated sheet; every later point of the walk then follows it, and the face was meshed
+/// over a region several times its own (#763). At most two more searches, only for a point that
+/// left the domain; a plane's single preimage stays where it was.
+fn in_domain_again<S: PreMeshableSurface>(
+    surface: &S,
+    point: Point3,
+    found: (f64, f64),
+    previous: Option<(f64, f64)>,
+    sp: &impl SP<S>,
+) -> (f64, f64) {
+    if previous.is_none() || in_domain(surface, found) {
+        return found;
+    }
+    let error = |(u, v): (f64, f64)| surface.subs(u, v).distance2(point);
+    let limit = error(found).max(TOLERANCE2);
+    [Some(clamped(surface, found)), None]
+        .into_iter()
+        .filter_map(|hint| sp(surface, point, hint))
+        .find(|uv| in_domain(surface, *uv) && error(*uv) <= limit)
+        .unwrap_or(found)
+}
+
 pub(super) fn by_search_parameter<S>(
     surface: &S,
     point: Point3,
@@ -469,7 +496,7 @@ impl PolyBoundaryPiece {
                     let (mut u, mut v) = match sp(surface, pt, previous) {
                         // SolidCraft: validate exact and nearest results alike, once per
                         // boundary point, including the bounded provisional preview.
-                        Some(hint) => sane(surface, pt, hint),
+                        Some(hint) => sane(surface, pt, in_domain_again(surface, pt, hint, previous, &sp)),
                         None => return vec![None],
                     };
                     if let (Some(up), Some((u0, _))) = (up, previous) {
