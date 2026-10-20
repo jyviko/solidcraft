@@ -243,6 +243,10 @@ fn ai_features_and_the_toolbar_button_are_on_by_default() {
 fn the_chat_pops_out_into_its_own_window_and_docks_back() {
     use crate::scenario::{handle_at, rect_of};
     let mut h = crate::scenario::Harness::new();
+    // No background look for installed agents: it finishes whenever the host's thread does and
+    // reports what this host has installed, and the window resized when it came in, moving the
+    // Dock button from where the test had read it (the click then missed it on CI).
+    h.app.agent_chat.detection = Some(Default::default());
     h.call("ui.agent_chat", json!({"open": true}));
     h.frames(3);
     assert!(rect_of("agent_chat:panel").is_some() && rect_of("agent_chat:window").is_none(), "docked by default");
