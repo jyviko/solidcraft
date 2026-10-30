@@ -421,7 +421,8 @@ fn g2_corners(body: &Body, edges: &[Vec3], radius: f64, setbacks: &[(Vec3, f64)]
     }
     let set_back: Vec<(Vec3, f64)> = corners.iter().copied().zip(distance).collect();
     setbacks_reach(body, edges, radius, &set_back)?;
-    let open = crate::blend_smlib::fillet_setback_open(body, edges, radius, &set_back, curvature)?;
+    let ease = crate::corner_g2::EASE_FACTOR * radius;
+    let open = crate::blend_smlib::fillet_setback_open(body, edges, radius, &set_back, ease, curvature)?;
     let mut patches = Vec::with_capacity(open.holes.len());
     for hole in &open.holes {
         let (patch, _) = crate::corner_g2::corner_patch(&open.sheet, hole, radius)?;

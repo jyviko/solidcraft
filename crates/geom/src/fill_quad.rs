@@ -245,7 +245,7 @@ pub fn quad_fill(edges: &[QuadEdge], frames: &mut dyn FnMut(usize, &[f64]) -> Re
     let mut spans = MIN_SPANS;
     let mut best: Option<(f64, String)> = None;
     while spans <= MAX_QUAD_SPANS {
-        let quilt = Quilt::new(&curves, q, spans, centre0, spec.fade)?;
+        let quilt = Quilt::new(&curves, q, spans, centre0, spec.fade, spec.curvature_tol)?;
         if quilt.unknowns > MAX_UNKNOWN_POINTS {
             break;
         }
@@ -555,6 +555,9 @@ struct Quilt {
     fade: f64,
     /// Each unknown's hard constraints, as the solve takes them ([`Map`]).
     maps: Vec<Map>,
+    /// The fill's curvature tolerance ([`QuadSpec::curvature_tol`]), which decides whether the
+    /// two faces at a hole's corner agree there ([`Quilt::agrees`]).
+    curvature_tol: f64,
 }
 
 /// A station: where, and what is asked there.
@@ -570,7 +573,7 @@ enum Station {
 }
 
 impl Quilt {
-    fn new(curves: &[Curve], q: usize, spans: usize, centre0: Vec3, fade: f64) -> SplineResult<Quilt> {
+    fn new(curves: &[Curve], q: usize, spans: usize, centre0: Vec3, fade: f64, curvature_tol: f64) -> SplineResult<Quilt> {
         let m = curves.len();
         let n = m / 2;
         // Breaks closer together towards both ends (Chebyshev–Lobatto points), where the
@@ -691,7 +694,7 @@ impl Quilt {
         }
         let size = curves.iter().flat_map(|c| c.h.iter().zip(&c.w).map(|(h, w)| *h * (1.0 / *w))).fold(0.0f64, |m, p| m.max(p.len())).max(1.0);
         let maps = maps_of(unknowns, &held, size)?;
-        Ok(Quilt { n, sp, patches, unknowns, curves: curves.to_vec(), centre0, middles, fade, maps })
+        Ok(Quilt { n, sp, patches, unknowns, curves: curves.to_vec(), centre0, middles, fade, curvature_tol, maps })
     }
 
     /// Patch `k`'s jet at `(u, v)`.
@@ -784,17 +787,8 @@ impl Quilt {
                 // there, against this edge's face's (`delta`), and that edge's tangent.
                 let other = if along_u { (2 * k + m - 1) % m } else { 2 * k };
                 let (here, there) = if along_u { (0.0, 1.0) } else { (1.0, 0.0) };
-                let corner = {
-                    let oc = self.curves.get(other).ok_or_else(|| SplineError::Invalid("edge".into()))?;
-                    let to = oc.derivs(there)?[1].normalized().ok_or_else(|| SplineError::Invalid("a hole edge stops".into()))?;
-                    let fo = frame_at(other, &[there])?.first().copied().ok_or_else(|| SplineError::Invalid("frame".into()))?;
-                    let fh = frame_at(edge, &[here])?.first().copied().ok_or_else(|| SplineError::Invalid("frame".into()))?;
-                    let th = curve.derivs(here)?[1].normalized().ok_or_else(|| SplineError::Invalid("a hole edge stops".into()))?;
-                    let (so, sh) = (sides.get(other).copied().unwrap_or(1.0), sides.get(edge).copied().unwrap_or(1.0));
-                    let (a, b) = (to.dot(th), to.dot(fh.leave));
-                    let mine = sh * (a * a * fh.form[0] + 2.0 * a * b * fh.form[1] + b * b * fh.form[2]);
-                    (to, so * fo.form[0] - mine)
-                };
+                let corner = self.corner_terms(edge, other, here, there, frame_at, &sides)?;
+                let agrees = self.agrees(edge, other, here, there, corner.1, frame_at, &sides)?;
                 // The edge's own parameter: the patch's along `v = 0`, run back up `u = 0`.
                 let ts: Vec<f64> = ss.iter().map(|s| if along_u { *s } else { 1.0 - s }).collect();
                 let frames = frame_at(edge, &ts)?;
@@ -812,7 +806,8 @@ impl Quilt {
                     let normal = (f.normal - tangent * f.normal.dot(tangent)).normalized().unwrap_or(f.normal) * side;
                     let leave = (f.leave - tangent * f.leave.dot(tangent) - normal * f.leave.dot(normal)).normalized().unwrap_or(f.leave);
                     let frame = Frame { normal, leave, form: f.form.map(|x| x * side) };
-                    out.push(Station::Edge { patch: k, along_u, s: *s, frame, tangent, weight: *wt, g2: fade(share), corner });
+                    let g2 = if agrees { 1.0 } else { fade(share) };
+                    out.push(Station::Edge { patch: k, along_u, s: *s, frame, tangent, weight: *wt, g2, corner });
                 }
             }
             // Spoke k: its stations on the breaks of both patches' spaces along it.
@@ -845,6 +840,74 @@ impl Quilt {
                 Ok(if f.first().map(|f| f.normal.dot(d1.cross(f.leave))).unwrap_or(0.0) >= 0.0 { 1.0 } else { -1.0 })
             })
             .collect()
+    }
+
+    /// At the hole's corner where edge `edge` (at its parameter `here`) meets edge `other` (at
+    /// `there`): `other`'s unit tangent, and how much more `other`'s face curves along it there
+    /// than `edge`'s face does (the patch, holding both edges, has `other`'s face's).
+    fn corner_terms(
+        &self,
+        edge: usize,
+        other: usize,
+        here: f64,
+        there: f64,
+        frame_at: &mut dyn FnMut(usize, &[f64]) -> SplineResult<Vec<Frame>>,
+        sides: &[f64],
+    ) -> SplineResult<(Vec3, f64)> {
+        let curve = self.curves.get(edge).ok_or_else(|| SplineError::Invalid("edge".into()))?;
+        let oc = self.curves.get(other).ok_or_else(|| SplineError::Invalid("edge".into()))?;
+        let to = oc.derivs(there)?[1].normalized().ok_or_else(|| SplineError::Invalid("a hole edge stops".into()))?;
+        let fo = frame_at(other, &[there])?.first().copied().ok_or_else(|| SplineError::Invalid("frame".into()))?;
+        let fh = frame_at(edge, &[here])?.first().copied().ok_or_else(|| SplineError::Invalid("frame".into()))?;
+        let th = curve.derivs(here)?[1].normalized().ok_or_else(|| SplineError::Invalid("a hole edge stops".into()))?;
+        let (so, sh) = (sides.get(other).copied().unwrap_or(1.0), sides.get(edge).copied().unwrap_or(1.0));
+        let (a, b) = (to.dot(th), to.dot(fh.leave));
+        let mine = sh * (a * a * fh.form[0] + 2.0 * a * b * fh.form[1] + b * b * fh.form[2]);
+        Ok((to, so * fo.form[0] - mine))
+    }
+
+    /// Whether the two faces at the hole's corner where edge `edge` (at its parameter `here`)
+    /// meets edge `other` (at `there`) agree there, so that the patch can be G2 to `edge`'s face
+    /// all the way to the corner: its G2 rows are then held up to it, not faded. The patch holds
+    /// both edges, so at the corner its normal curvature along `other` is `other`'s face's
+    /// (`delta`, the difference from `edge`'s face's along it, must vanish); and with G1 to
+    /// `other`'s face along `other`, which turns in that face by its geodesic curvature `k`, its
+    /// curvature across `edge` leaves `edge`'s face's by `II(t, t) k y` at `y` from the corner
+    /// (`II(t, t)` `edge`'s face's normal curvature along `edge`: a graph `z = f(x, y)` with
+    /// `f(0, y) = II y² / 2`, `f_x = f_xx = 0` there, and `∇f = 0` along `y = k x² / 2` needs
+    /// `f_xxy = −II k`). Both within the curvature tolerance over the fade: a round eased into the
+    /// curvature-continuous section at its setback (no curvature across where it meets a plane),
+    /// and a face curve that leaves the contact line without turning.
+    #[allow(clippy::too_many_arguments)]
+    fn agrees(
+        &self,
+        edge: usize,
+        other: usize,
+        here: f64,
+        there: f64,
+        delta: f64,
+        frame_at: &mut dyn FnMut(usize, &[f64]) -> SplineResult<Vec<Frame>>,
+        sides: &[f64],
+    ) -> SplineResult<bool> {
+        let tol = self.curvature_tol;
+        if !(delta.abs() <= tol) {
+            return Ok(false);
+        }
+        let oc = self.curves.get(other).ok_or_else(|| SplineError::Invalid("edge".into()))?;
+        let fh = frame_at(edge, &[here])?.first().copied().ok_or_else(|| SplineError::Invalid("frame".into()))?;
+        let fo = frame_at(other, &[there])?.first().copied().ok_or_else(|| SplineError::Invalid("frame".into()))?;
+        let [_, o1, o2] = oc.derivs(there)?;
+        let speed2 = o1.len2();
+        let to = o1.normalized().ok_or_else(|| SplineError::Invalid("a hole edge stops".into()))?;
+        if !(speed2 > 0.0) {
+            return invalid("a hole edge stops");
+        }
+        // `other`'s turn in its face: its curvature vector's part in the face's tangent plane,
+        // square to it.
+        let bend = o2 * (1.0 / speed2) - to * (o2.dot(to) / speed2);
+        let k = (bend - fo.normal * bend.dot(fo.normal)).len();
+        let ii = sides.get(edge).copied().unwrap_or(1.0) * fh.form[0];
+        Ok((ii * k).abs() * self.fade <= tol)
     }
 
     /// Solve the rounds: freeze the frames at the last solution (the fixed nets at first), fit.
@@ -1078,6 +1141,9 @@ impl Quilt {
             // Edge 2k is patch k's `v = 0`; edge 2k + 1 is patch k + 1's `u = 0`, run back.
             let (patch, along_u) = if j % 2 == 0 { (j / 2, true) } else { ((j / 2 + 1) % n, false) };
             // Its side's corner is at its start (even) or its end (odd).
+            let (other, here, there) = if j % 2 == 0 { ((j + m - 1) % m, 0.0, 1.0) } else { ((j + 1) % m, 1.0, 0.0) };
+            let (_, delta) = self.corner_terms(j, other, here, there, frame_at, &sides)?;
+            let agrees = self.agrees(j, other, here, there, delta, frame_at, &sides)?;
             let frames = frame_at(j, &ts)?;
             let side = sides.get(j).copied().unwrap_or(1.0);
             for (t, f) in ts.iter().zip(&frames) {
@@ -1098,7 +1164,7 @@ impl Quilt {
                 let share = reach(from_corner, self.fade);
                 worse(&mut fit.angle, angle, *t);
                 worse(&mut fit.curvature, jump, *t);
-                if share >= 1.0 {
+                if share >= 1.0 || agrees {
                     worse(&mut fit.curvature_clear, jump, *t);
                 }
             }

@@ -33,6 +33,16 @@ use crate::{KernelError, Result};
 /// side as long as the round's section is wide, with room either way.
 pub const DEFAULT_SETBACK_FACTOR: f64 = 1.5;
 
+/// Each round's ease into the curvature-continuous section before a G2 corner's setback: this
+/// times its radius along each edge (SMLib's `smlib_blend_setback_open_eased`), a quarter of the
+/// round's width: short enough that the default setback and the ease fit on an edge 1.75 r
+/// long beside the corner (and both ends of one 3.5 r long), as the corner's patches need. It makes the
+/// hole's conditions agree at its corners: the section meets each planar face with no
+/// curvature across, and the face's curve leaves the contact line without turning, so the
+/// patches can be G2 to the rounds and the faces all the way to the corners. A round keeps its
+/// own section up to where its ease starts, `setback + ease` from the vertex.
+pub const EASE_FACTOR: f64 = 0.25;
+
 /// How far the patch's normal curvature across a seam may be from the face's, clear of the hole's
 /// corners: this share of the corner's round's curvature 1 / r, the jump a rolling ball makes.
 pub const CURVATURE_SHARE: f64 = 5e-3;

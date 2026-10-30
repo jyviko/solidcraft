@@ -62,9 +62,20 @@ pub(crate) struct OpenCorners {
 /// corners' setback sections and the curves on the faces between them, and leaves out the patch
 /// that would fill each corner, for the caller to fill.
 /// `curvature`: the rounds' sections are curvature-continuous ([`fillet_g2`]), else circular.
-pub(crate) fn fillet_setback_open(body: &Body, edges: &[Vec3], radius: f64, setbacks: &[(Vec3, f64)], curvature: bool) -> Result<OpenCorners> {
+/// `ease`: the length before each setback over which every round eases into the
+/// curvature-continuous section (SMLib's `smlib_blend_setback_open_eased`), so that the hole's
+/// sections meet planar faces with no curvature across and its face curves leave the contact
+/// lines without turning; 0 for none.
+pub(crate) fn fillet_setback_open(
+    body: &Body,
+    edges: &[Vec3],
+    radius: f64,
+    setbacks: &[(Vec3, f64)],
+    ease: f64,
+    curvature: bool,
+) -> Result<OpenCorners> {
     let kind = if curvature { Kind::Curvature } else { Kind::Round };
-    imp::blend_setback_open(body, kind, edges, &vec![radius; edges.len()], setbacks)
+    imp::blend_setback_open(body, kind, edges, &vec![radius; edges.len()], setbacks, ease)
 }
 
 /// Curvature-continuous rounds with the setback of a round of `radius` ([`crate::fillet_g2`]).
@@ -291,7 +302,14 @@ mod imp {
     }
 
     /// [`blend_setback`] with the set-back corners left open (`super::OpenCorners`).
-    pub(super) fn blend_setback_open(body: &Body, kind: Kind, edges: &[Vec3], sizes: &[f64], setbacks: &[(Vec3, f64)]) -> Result<super::OpenCorners> {
+    pub(super) fn blend_setback_open(
+        body: &Body,
+        kind: Kind,
+        edges: &[Vec3],
+        sizes: &[f64],
+        setbacks: &[(Vec3, f64)],
+        ease: f64,
+    ) -> Result<super::OpenCorners> {
         let what = "fillet with open setback corners";
         body.require_brep(what)?;
         sizes_ok(what, sizes)?;
@@ -301,15 +319,20 @@ mod imp {
         if setbacks.iter().any(|(p, d)| !p.is_finite() || !(d.is_finite() && *d > 1e-6 && *d < 1e6)) {
             return Err(KernelError::Invalid(format!("{what}: each corner is a finite point with a positive, finite setback")));
         }
+        if !(ease.is_finite() && (0.0..1e6).contains(&ease)) {
+            return Err(KernelError::Invalid(format!("{what}: the ease must be finite and at least zero")));
+        }
         let picked = resolve(body, edges)?;
         let next = crate::blend::unfinished_chain(body, edges, &picked.edges, &picked.hidden)?;
         let corners = corner_vertices(body, setbacks.iter().map(|(p, _)| *p))?;
         let distances: Vec<f64> = setbacks.iter().map(|(_, d)| *d).collect();
+        let eases = vec![ease; distances.len()];
         let at: Vec<Vec3> = setbacks.iter().map(|(p, _)| *p).collect();
         let tol = pick_tolerance(body);
-        let (sheet, holes, order) =
-            run_with(body, what, &picked.edges, &at, |b| b.blend_setback_open(blend_kind(kind), &picked.points, sizes, &corners, &distances, tol))
-                .map_err(|e| crate::blend::with_continuation(e, next))?;
+        let (sheet, holes, order) = run_with(body, what, &picked.edges, &at, |b| {
+            b.blend_setback_open(blend_kind(kind), &picked.points, sizes, &corners, &distances, &eases, tol)
+        })
+        .map_err(|e| crate::blend::with_continuation(e, next))?;
         // SMLib's indices in the sheet's own orders.
         let place = |list: &[usize], i: usize| if list.is_empty() { Some(i) } else { list.get(i).copied() };
         let renumber = |hole: &solidcraft_smlib::Hole| -> Result<Vec<(usize, bool)>> {

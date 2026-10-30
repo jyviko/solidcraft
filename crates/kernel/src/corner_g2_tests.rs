@@ -39,6 +39,48 @@ fn graded(name: &str, body: &Body, near: Vec3, within: f64, clear: f64) -> Corne
     c
 }
 
+/// The corner's patches: the faces round their centre, the one vertex six faces meet at.
+fn patches_of(rec: &b::Brep) -> Vec<usize> {
+    let mut at_vertex: Vec<Vec<usize>> = vec![Vec::new(); rec.vertices.len()];
+    for e in &rec.edges {
+        for v in e.vertices {
+            at_vertex[v as usize].extend(e.uses.iter().map(|u| u.face as usize));
+        }
+    }
+    at_vertex
+        .iter()
+        .map(|f| {
+            let mut f = f.clone();
+            f.sort_unstable();
+            f.dedup();
+            f
+        })
+        .find(|f| f.len() == 6)
+        .expect("the patches' centre")
+}
+
+/// The worst curvature jump across the seams between the corner's patches (no plane or round of
+/// the box) and the rounds (cylinders, and the eased stretches before the setbacks), over each
+/// seam's whole length, its ends included: the exact surfaces' normal sections square to the
+/// seam ([`seam_diagnostics`]), no mesh.
+fn round_seams(body: &Body) -> f64 {
+    let rec = brep_record(body).unwrap();
+    let plane = |f: usize| matches!(rec.faces[f].surface, b::Surface::Plane { .. } | b::Surface::PlaneThrough { .. });
+    let centre = patches_of(&rec);
+    let patch = |f: usize| centre.contains(&f);
+    let edges: Vec<usize> = (0..rec.edges.len())
+        .filter(|e| {
+            let faces: Vec<usize> = rec.edges[*e].uses.iter().map(|u| u.face as usize).collect();
+            faces.iter().any(|f| patch(*f)) && faces.iter().any(|f| !patch(*f) && !plane(*f))
+        })
+        .collect();
+    assert!(!edges.is_empty(), "no seam between the corner and a round");
+    let report =
+        seam_diagnostics(body, &edges, 65, ContinuityTolerances { gap_mm: 1e-3, angle_deg: 1.0, curvature_per_mm: 1e-6, ..Default::default() })
+            .unwrap();
+    report.seams.iter().flat_map(|s| s.stations.iter()).map(|st| st.curvature_jump_per_mm).fold(0.0, f64::max)
+}
+
 /// The G2 corner of 07/015, set back the default 7.5 (1.5 r): one closed valid solid of the box's
 /// six faces, the three rounds and the six patches about the centre (15 faces, as SMLib's own
 /// setback corner, 07/013), within the box; graded as the ladder grades it, every seam of the
@@ -71,6 +113,17 @@ fn the_box_corner_g2_patch_is_a_closed_solid_curvature_continuous_to_its_neighbo
     assert!(c.gap_mm < 1e-9 && c.normal_angle_deg <= crate::fill::PATCH_ANGLE_TOL_DEG, "{c:?}");
     assert!(c.stations_clear > 0 && c.curvature_jump_clear_per_mm <= CURVATURE_SHARE / 5.0, "{}", c.curvature_jump_clear_per_mm);
     assert!(b.curvature_jump_clear_per_mm > 0.19);
+    // G2 to each round along the whole seam, to its ends on the faces the rounds end on; and on
+    // a 20 mm box with r3 rounds the same, to its 1 / r share.
+    let rounds = round_seams(&g2);
+    eprintln!("G2 corner: worst jump to the rounds along their whole seams {rounds:.4e} per mm");
+    assert!(rounds <= CURVATURE_SHARE / 5.0, "{rounds}");
+    let small = box_solid(Vec3::ZERO, Vec3::new(20.0, 20.0, 20.0)).unwrap();
+    let edges = [Vec3::new(10.0, 20.0, 20.0), Vec3::new(20.0, 10.0, 20.0), Vec3::new(20.0, 20.0, 10.0)];
+    let g2 = fillet_g2_corners(&small, &edges, 3.0, &[]).unwrap();
+    let rounds = round_seams(&g2);
+    eprintln!("G2 corner, 20 mm box at r3: worst jump to the rounds along their whole seams {rounds:.4e} per mm");
+    assert!(rounds <= CURVATURE_SHARE / 3.0, "{rounds}");
 }
 
 /// Set back 8, as SMLib's own setback test: outside the corner cube [52, 60] x [32, 40] x
@@ -236,8 +289,7 @@ fn a_long_setback_keeps_the_g2_patch_inside_the_box() {
     for s in [11.0, 12.0, 13.0, 14.0, 15.0] {
         let g2 = fillet_g2_corners(&body, &edges, 5.0, &[(corner, s)]).unwrap();
         let rec = brep_record(&g2).unwrap();
-        let patches: Vec<usize> =
-            (0..rec.faces.len()).filter(|f| matches!(rec.faces[*f].surface, b::Surface::Spline { .. } | b::Surface::RationalSpline { .. })).collect();
+        let patches = patches_of(&rec);
         assert_eq!(patches.len(), 6, "{s}: six patches");
         let (mut lo, mut hi, mut at) = (f64::NEG_INFINITY, f64::NEG_INFINITY, [f64::NAN; 2]);
         for f in &patches {
@@ -249,8 +301,13 @@ fn a_long_setback_keeps_the_g2_patch_inside_the_box() {
         }
         let c = graded(&format!("set back {s}"), &g2, corner, 1.1 * s + 1.0, 0.15 * s);
         eprintln!("set back {s}: {} patches, past the box by {lo:.4e} at (u, v) {at:?} (at most {hi:.4e})", patches.len());
-        if !(hi <= 1e-9 && c.normal_angle_deg <= crate::fill::PATCH_ANGLE_TOL_DEG && c.curvature_jump_clear_per_mm <= CURVATURE_SHARE / 5.0) {
-            wrong.push(format!("set back {s}: past the box by {lo:.4e}..{hi:.4e} at (u, v) {at:?}, {c:?}"));
+        let rounds = round_seams(&g2);
+        if !(hi <= 1e-9
+            && rounds <= CURVATURE_SHARE / 5.0
+            && c.normal_angle_deg <= crate::fill::PATCH_ANGLE_TOL_DEG
+            && c.curvature_jump_clear_per_mm <= CURVATURE_SHARE / 5.0)
+        {
+            wrong.push(format!("set back {s}: past the box by {lo:.4e}..{hi:.4e} at (u, v) {at:?}, to the rounds {rounds:.3e}, {c:?}"));
         }
     }
     assert!(wrong.is_empty(), "{wrong:#?}");

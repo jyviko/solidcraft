@@ -1,5 +1,5 @@
 //! The operations block of `capi/include/smlib.h` (`smlib_boolean`, `smlib_boolean_union_all`, `smlib_boolean2d`, `smlib_fillet`,
-//! `smlib_chamfer`, `smlib_blend`, `smlib_blend_dropping`, `smlib_blend_setback`, `smlib_blend_setback_open`, `smlib_fillet_variable`, `smlib_chamfer_sides`, `smlib_shell`, `smlib_offset_faces`,
+//! `smlib_chamfer`, `smlib_blend`, `smlib_blend_dropping`, `smlib_blend_setback`, `smlib_blend_setback_open_eased`, `smlib_fillet_variable`, `smlib_chamfer_sides`, `smlib_shell`, `smlib_offset_faces`,
 //! `smlib_thicken`, `smlib_draft`, `smlib_merge_faces`, `smlib_brep_solid_count`, `smlib_imprint`; the fork's `capi/src/smlib_ops.cpp`), declared by
 //! hand. Part of the FFI boundary, like its parent: called only through
 //! [`crate::ops`].
@@ -120,7 +120,7 @@ unsafe extern "C" {
         out_failed_point: *mut i64,
         out_failed_corner: *mut i64,
     ) -> i32;
-    fn smlib_blend_setback_open(
+    fn smlib_blend_setback_open_eased(
         brep: *const RawBrep,
         kind: i32,
         points: *const f64,
@@ -128,6 +128,7 @@ unsafe extern "C" {
         n_points: i64,
         corners: *const f64,
         setbacks: *const f64,
+        eases: *const f64,
         n_corners: i64,
         tolerance: f64,
         out: *mut *mut RawBrep,
@@ -366,10 +367,12 @@ pub fn blend_setback(_: i32, _: &Handle, _: &[[f64; 3]], _: &[f64], _: &[[f64; 3
     Err((NOT_BUILT, None, None))
 }
 
-/// `smlib_blend_setback_open`: the sheet and the holes' values as the C function writes them
-/// (per corner: n, then n (edge, face, forward) triples). The buffer starts at room for 64
-/// edges a corner and is grown once to the length a first call names.
+/// `smlib_blend_setback_open_eased` (an ease of 0 is `smlib_blend_setback_open`): the sheet and
+/// the holes' values as the C function writes them (per corner: n, then n (edge, face, forward)
+/// triples). The buffer starts at room for 64 edges a corner and is grown once to the length a
+/// first call names.
 #[cfg(feature = "native")]
+#[allow(clippy::too_many_arguments)]
 pub fn blend_setback_open(
     kind: i32,
     b: &Handle,
@@ -377,11 +380,12 @@ pub fn blend_setback_open(
     sizes: &[f64],
     corners: &[[f64; 3]],
     setbacks: &[f64],
+    eases: &[f64],
     tolerance: f64,
 ) -> Result<(Handle, Vec<i64>), SetbackError> {
     let n = i64::try_from(points.len()).map_err(|_| (ERR_ARG, None, None))?;
     let nc = i64::try_from(corners.len()).map_err(|_| (ERR_ARG, None, None))?;
-    if sizes.len() != points.len() || setbacks.len() != corners.len() {
+    if sizes.len() != points.len() || setbacks.len() != corners.len() || eases.len() != corners.len() {
         return Err((ERR_ARG, None, None));
     }
     let flat = points.as_ptr().cast::<f64>();
@@ -391,7 +395,7 @@ pub fn blend_setback_open(
         let cap = i64::try_from(holes.len()).map_err(|_| (ERR_ARG, None, None))?;
         let (mut failed, mut failed_corner, mut len) = (-1i64, -1i64, -1i64);
         let made = new_brep(|out| unsafe {
-            smlib_blend_setback_open(
+            smlib_blend_setback_open_eased(
                 b.raw(),
                 kind,
                 flat,
@@ -399,6 +403,7 @@ pub fn blend_setback_open(
                 n,
                 flat_corners,
                 setbacks.as_ptr(),
+                eases.as_ptr(),
                 nc,
                 tolerance,
                 out,
@@ -422,12 +427,14 @@ pub fn blend_setback_open(
 }
 
 #[cfg(not(feature = "native"))]
+#[allow(clippy::too_many_arguments)]
 pub fn blend_setback_open(
     _: i32,
     _: &Handle,
     _: &[[f64; 3]],
     _: &[f64],
     _: &[[f64; 3]],
+    _: &[f64],
     _: &[f64],
     _: f64,
 ) -> Result<(Handle, Vec<i64>), SetbackError> {

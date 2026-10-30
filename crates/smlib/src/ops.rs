@@ -245,7 +245,12 @@ impl Brep {
     /// corner's setback sections is removed, so the result is a sheet whose only free edges are
     /// the holes', one [`Hole`] per corner in `corners`' order (a vertex picked twice gives its
     /// hole twice). A corner whose patch SMLib does not build as a disc of faces of its own is
-    /// [`Error::Unsupported`].
+    /// [`Error::Unsupported`]. `eases[j]` (mm, >= 0) eases each round at corner `j` into the
+    /// curvature-continuous section over that length before its setback
+    /// (`smlib_blend_setback_open_eased`): the hole's sections then meet planar faces with no
+    /// curvature across, and its face curves leave the contact lines without turning; 0 leaves
+    /// the rounds as they are.
+    #[allow(clippy::too_many_arguments)]
     pub fn blend_setback_open(
         &self,
         kind: Blend,
@@ -253,6 +258,7 @@ impl Brep {
         sizes: &[f64],
         corners: &[[f64; 3]],
         setbacks: &[f64],
+        eases: &[f64],
         tolerance: f64,
     ) -> Result<(Brep, Vec<Hole>)> {
         init()?;
@@ -262,6 +268,7 @@ impl Brep {
             || corners.is_empty()
             || corners.len() > MAX_POINTS
             || setbacks.len() != corners.len()
+            || eases.len() != corners.len()
         {
             return Err(Error::Argument);
         }
@@ -271,7 +278,7 @@ impl Brep {
             Blend::Chord => ffi::ops::BLEND_CHORD,
             Blend::Chamfer => ffi::ops::BLEND_CHAMFER,
         };
-        let (h, values) = ffi::ops::blend_setback_open(kind, &self.0, edges, sizes, corners, setbacks, tolerance).map_err(setback_error)?;
+        let (h, values) = ffi::ops::blend_setback_open(kind, &self.0, edges, sizes, corners, setbacks, eases, tolerance).map_err(setback_error)?;
         // A buffer that does not read as the C API documents it is a buffer error.
         let holes = holes(&values, corners.len()).ok_or_else(|| error(ffi::ERR_BUFFER))?;
         Ok((Brep(h), holes))

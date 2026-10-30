@@ -395,10 +395,10 @@ fn a_setback_corner_left_open_returns_its_hole() {
     let edges = [[30.0, 40.0, 20.0], [60.0, 20.0, 20.0], [60.0, 40.0, 10.0]];
     solidcraft_profile::set_enabled(true);
     let mark = solidcraft_profile::mark();
-    let (open, holes) = b.blend_setback_open(Blend::Round, &edges, &[5.0; 3], &[[60.0, 40.0, 20.0]], &[8.0], 0.1).unwrap();
+    let (open, holes) = b.blend_setback_open(Blend::Round, &edges, &[5.0; 3], &[[60.0, 40.0, 20.0]], &[8.0], &[0.0], 0.1).unwrap();
     // The call is a profiler span like every other, timed by the C API.
     let report = mark.report();
-    assert!(report.rows.iter().any(|r| r.category == "smlib" && r.name == "smlib_blend_setback_open"), "{report:?}");
+    assert!(report.rows.iter().any(|r| r.category == "smlib" && r.name == "smlib_blend_setback_open_eased"), "{report:?}");
     shot(&open, "setback_open");
     assert_eq!(open.counts().unwrap(), [9, 30, 22]);
     assert!(!open.is_manifold_solid().unwrap());
@@ -413,7 +413,7 @@ fn a_setback_corner_left_open_returns_its_hole() {
         assert!(h.face < 9);
     }
     // A corner where an edge is not rounded builds no setback, and the refusal names it.
-    let refused = b.blend_setback_open(Blend::Round, &edges[..2], &[5.0; 2], &[[60.0, 40.0, 20.0]], &[8.0], 0.1);
+    let refused = b.blend_setback_open(Blend::Round, &edges[..2], &[5.0; 2], &[[60.0, 40.0, 20.0]], &[8.0], &[0.0], 0.1);
     assert!(matches!(refused, Err(Error::CornerRefused { corner: 0 })), "{refused:?}");
     let refused = b.blend_setback(Blend::Round, &edges[..2], &[5.0; 2], &[[60.0, 40.0, 20.0]], &[8.0], 0.1);
     assert!(matches!(refused, Err(Error::CornerRefused { corner: 0 })), "{refused:?}");
