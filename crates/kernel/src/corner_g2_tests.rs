@@ -126,22 +126,41 @@ fn the_box_corner_g2_patch_is_a_closed_solid_curvature_continuous_to_its_neighbo
     assert!(rounds <= CURVATURE_SHARE / 3.0, "{rounds}");
 }
 
-/// Set back 8, as SMLib's own setback test: outside the corner cube [52, 60] x [32, 40] x
-/// [12, 20] the body is the sphere corner's, and inside it the convex body holds the hull of its
-/// points on the cube's faces (299.0201, by a hull of them sampled) and lies within the three
-/// rounds' prisms (`fillet_setback_tests`).
+/// Set back 8, as SMLib's own setback test. The rounds keep their circular sections up to where
+/// their ease starts, `a = 8 + EASE_FACTOR r` from the vertex (9.25 at r5), so outside the cube
+/// `[60 - a, 60] x [40 - a, 40] x [20 - a, 20]` the body is the ball corner's exactly: each cut
+/// by that cube takes the same volume, to what the two cuts and their measures hold (SMLib's
+/// exact volumes, to 1e-8 of each; and each cut's faces on the cube's three faces, at most 3 a²,
+/// within its edges' tolerance of the exact planes). Inside the cube the eased rounds are not convex along their edges (the
+/// curvature-continuous section's middle lies 0.240 r from the edge, the circle's 0.293 r, and
+/// the ease moves it by a smoothstep, not a concave law), so no tangent plane bounds the body
+/// there. What holds is what the construction removes: the rounds take material only within the
+/// r x r strip along each edge, and the patches only inside the setback cube of side 8, so
+/// inside the cube the body keeps at least `a^3 - 8^3 - 3 (a - 8) r^2`; and it lies in the box.
 #[test]
-fn set_back_8_the_g2_corner_lies_between_the_hull_and_the_prisms() {
-    let pi = std::f64::consts::PI;
+fn set_back_8_the_g2_corner_is_the_ball_corner_outside_its_eased_cube() {
     let (body, edges) = box_corner();
-    let sphere = measure(&fillet(&body, &edges, 5.0).unwrap()).unwrap().volume;
-    let g2 = fillet_g2_corners(&body, &edges, 5.0, &[(Vec3::new(60.0, 40.0, 20.0), 8.0)]).unwrap();
-    let v = measure(&g2).unwrap().volume;
-    let outside = sphere - (512.0 - 225.0 * (1.0 - pi / 4.0) - 125.0 * (1.0 - pi / 6.0));
-    let prisms = 512.0 - 225.0 * (1.0 - pi / 4.0) - 125.0 * (2f64.sqrt() - 1.0);
-    eprintln!("G2 corner set back 8: volume {v:.6} in [{:.6}, {:.6}]", outside + 299.0201, outside + prisms);
-    assert!(v > outside + 299.0201 && v < outside + prisms);
-    let c = graded("G2 corner set back 8", &g2, Vec3::new(60.0, 40.0, 20.0), 15.0, 1.2);
+    let (r, setback) = (5.0, 8.0);
+    let a = setback + crate::corner_g2::EASE_FACTOR * r;
+    let corner = Vec3::new(60.0, 40.0, 20.0);
+    let ball = fillet(&body, &edges, r).unwrap();
+    let g2 = fillet_g2_corners(&body, &edges, r, &[(corner, setback)]).unwrap();
+    let cube = box_solid(corner - Vec3::new(a, a, a), corner).unwrap();
+    let cut = |b: &Body| boolean(b, &cube, BoolOp::Cut).unwrap().unwrap();
+    let (g2_cut, ball_cut) = (cut(&g2), cut(&ball));
+    let (g2_out, ball_out) = (measure(&g2_cut).unwrap().volume, measure(&ball_cut).unwrap().volume);
+    let edge_tol = |b: &Body| brep_record(b).unwrap().edges.iter().map(|e| e.tolerance).fold(0.0, f64::max);
+    let held = 1e-8 * (g2_out + ball_out) + 3.0 * a * a * (edge_tol(&g2_cut) + edge_tol(&ball_cut));
+    let m = measure(&g2).unwrap();
+    let inside = m.volume - g2_out;
+    let least = a.powi(3) - setback.powi(3) - 3.0 * (a - setback) * r * r;
+    eprintln!(
+        "G2 corner set back 8: outside the {a} mm cube {g2_out:.9} (ball corner {ball_out:.9}, to {held:.3e}), inside {inside:.6} (at least {least:.6})"
+    );
+    assert!((g2_out - ball_out).abs() <= held, "{g2_out} vs {ball_out} (to {held})");
+    assert!(inside >= least && inside <= a.powi(3), "{inside} not in [{least}, {}]", a.powi(3));
+    assert!((m.bbox.min - Vec3::ZERO).len() < 1e-6 && (m.bbox.max - corner).len() < 1e-6, "{:?}", m.bbox);
+    let c = graded("G2 corner set back 8", &g2, corner, 15.0, 1.2);
     assert!(c.normal_angle_deg <= crate::fill::PATCH_ANGLE_TOL_DEG && c.curvature_jump_clear_per_mm <= CURVATURE_SHARE / 5.0, "{c:?}");
 }
 
