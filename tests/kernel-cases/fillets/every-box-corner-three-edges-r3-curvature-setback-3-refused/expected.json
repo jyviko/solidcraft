@@ -1,8 +1,8 @@
 {
  "sources": [],
- "what": "the three edges at one box corner rounded r3, Corners: Curvature set back exactly 3, the radius: refused, naming the least setback",
+ "what": "the three edges at one box corner rounded r3, Corners: Curvature set back exactly 3, the radius: short of the corner's ellipsoid (4.2426, sqrt 2 r): refused, naming the least setback",
  "source": "invariants",
- "method": "on a corner of faces square to each other the rounds' contact lines meet r = 3 from the vertex along each edge; a setback of 3 starts the patch exactly there, which leaves it no room (the setback must be more than that), so the right answer is the refusal naming the radius, before SMLib runs (solid.fillet `setbacks`).",
+ "method": "a G2 corner's setback must be at least the intercept on its edges of the corner's ellipsoid (centred at the vertex, through the points where neighbouring rounds' contact lines cross on each face, crossing each face square to it there; owner's rule 2026-10-30): the sphere of radius sqrt 2 r at a box corner = 4.2426 at r3; 3 is short of it, so the right answer is the refusal naming 4.2426, before SMLib runs (solid.fillet `setbacks`).",
  "outcome": "refused",
- "refusal": "the setback must be more than the radius (3 mm)"
+ "refusal": "the setback must be at least 4.2426 mm"
 }

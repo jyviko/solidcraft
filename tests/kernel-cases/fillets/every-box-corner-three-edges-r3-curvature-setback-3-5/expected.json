@@ -1,30 +1,8 @@
 {
  "sources": [],
- "what": "the three edges at one box corner rounded r3, Corners: Curvature set back 3.5, just past the radius: the smallest kind of setback that builds",
+ "what": "the three edges at one box corner rounded r3, Corners: Curvature set back 3.5: past the radius but short of the corner's ellipsoid (4.2426, sqrt 2 r): refused, naming the least setback",
  "source": "invariants",
- "method": "as every-box-corner-three-edges-r3-curvature-corner with the setback 3.5: past where the rounds' contact lines meet (r = 3 from the vertex on a corner of faces square to each other), so the patch is built (the rule: a setback must be more than the radius). No closed-form volume (a fitted patch): one valid body of 10 faces within the box. Graded as fillets/9-fillet-corner-r1-curvature-default-setback, scaled by r: at the points where a round's section ends on a face the round is only tangent (G1) to the plane, its curvature jumping by 1/r, so no patch is G2 to both there; the patch's curvature jump is bounded at stations at least 0.24 r from each turn, within 2.2 r of the corner, at most 0.5% of 1/r per mm.",
- "body_count": 1,
- "faces": 10,
- "bbox": {
-  "min": [
-   0,
-   0,
-   0
-  ],
-  "max": [
-   40,
-   30,
-   20
-  ]
- },
- "continuity": {
-  "near": [
-   40,
-   30,
-   20
-  ],
-  "within_mm": 6.6,
-  "clear_mm": 0.72,
-  "curvature_jump_per_mm": 0.001667
- }
+ "method": "a G2 corner's setback must be at least the intercept on its edges of the corner's ellipsoid (centred at the vertex, through the points where neighbouring rounds' contact lines cross on each face, crossing each face square to it there; owner's rule 2026-10-30): the sphere of radius sqrt 2 r at a box corner = 4.2426 at r3; 3.5 is short of it, so the right answer is the refusal naming 4.2426, before SMLib runs (solid.fillet `setbacks`). Built before the rule (its patch from 3.5, just past where the rounds' contact lines meet).",
+ "outcome": "refused",
+ "refusal": "the setback must be at least 4.2426 mm"
 }
