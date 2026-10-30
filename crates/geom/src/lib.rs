@@ -25,6 +25,7 @@ pub mod fill_general;
 pub mod fill_iso;
 pub mod fill_quad;
 mod grid;
+pub mod linalg;
 pub mod linkage;
 mod mesh;
 pub mod mesh_distance;
