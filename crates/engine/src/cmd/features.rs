@@ -3255,8 +3255,8 @@ mod corner_tests {
         assert_eq!(solidcraft_kernel::measure(&ball).unwrap().area, solidcraft_kernel::measure(&same).unwrap().area);
         assert!(solidcraft_kernel::measure(&ball).unwrap().volume > 7000.0);
         // `corner: g2`: the corner set back (1.5 r by default, or as `setbacks` says) and filled
-        // with the G2 patch: one closed solid of the box's faces, the rounds and the patch, a
-        // little fuller than the ball's corner (its patch spans the setback, not the ball).
+        // with the G2 patches: one closed solid of the box's faces, the rounds and six patches
+        // about a centre, about as full as the ball's corner.
         let ball_volume = solidcraft_kernel::measure(&ball).unwrap().volume;
         for setbacks in [json!([]), json!([{"vertex": [0, 0, 0], "distance": 7}])] {
             let mut s = Session::default();
@@ -3266,8 +3266,8 @@ mod corner_tests {
             assert!(body.validity().is_empty(), "{:?}", body.validity());
             let m = solidcraft_kernel::measure(&body).unwrap();
             eprintln!("corner g2, setbacks {setbacks}: {} faces, volume {:.4} (ball {:.4})", m.faces, m.volume, ball_volume);
-            assert_eq!(m.faces, 10);
-            assert!((m.volume - ball_volume).abs() < 1e-3 * ball_volume, "{} vs {}", m.volume, ball_volume);
+            assert_eq!(m.faces, 15);
+            assert!((m.volume - ball_volume).abs() < 5e-3 * ball_volume, "{} vs {}", m.volume, ball_volume);
         }
         let mut s = Session::default();
         run(&mut s, "solid.box", &json!({"length": 20, "width": 20, "height": 20, "body_name": "B"}));

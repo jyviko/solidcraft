@@ -173,8 +173,8 @@ pub use build::{
     loft_with_rails, path_polyline, planar_face_record, revolve, revolve_whole, sphere, sweep, sweep_with, torus,
 };
 pub use continuity::{
-    ContinuityReport, ContinuityTolerances, DEFAULT_SAMPLES, EdgePick, MAX_SAMPLES, MIN_SAMPLES, SeamReport, SeamStation, SeamVerdict, SeamWorst,
-    pick_edges, seam_diagnostics,
+    CORNER_SEAM_ANGLE_DEG, CORNER_SEAM_SAMPLES, ContinuityReport, ContinuityTolerances, CornerContinuity, CornerSeam, DEFAULT_SAMPLES, EdgePick,
+    MAX_SAMPLES, MIN_SAMPLES, SeamReport, SeamStation, SeamVerdict, SeamWorst, corner_continuity, pick_edges, seam_diagnostics,
 };
 pub use continuity_order::{Construction, Continuity};
 pub use corner_g2::{CURVATURE_SHARE, DEFAULT_SETBACK_FACTOR};

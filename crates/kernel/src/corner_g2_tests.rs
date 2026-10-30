@@ -10,68 +10,41 @@ fn box_corner() -> (Body, [Vec3; 3]) {
     (b, [Vec3::new(30.0, 40.0, 20.0), Vec3::new(60.0, 20.0, 20.0), Vec3::new(60.0, 40.0, 10.0)])
 }
 
-/// The worst curvature jump across the seams of the faces that are none of the box's planes or
-/// rounds (the corner's: a sphere, or a patch), and the same clear of the hole's corners: a station counts there when
-/// it is at least `share` of its seam's side (its edge and the edge that continues it smoothly:
-/// SMLib splits each side in two) from the end of the side at a corner, a vertex where the seam
-/// turns.
-fn corner_seams(body: &Body, share: f64) -> (f64, f64, usize) {
-    let rec = brep_record(body).unwrap();
-    let corner_faces: Vec<usize> = rec
-        .faces
-        .iter()
-        .enumerate()
-        .filter(|(_, f)| !matches!(f.surface, b::Surface::Plane { .. } | b::Surface::PlaneThrough { .. } | b::Surface::Cylinder { .. }))
-        .map(|(i, _)| i)
-        .collect();
-    let edges: Vec<usize> = (0..rec.edges.len()).filter(|e| rec.edges[*e].uses.iter().any(|u| corner_faces.contains(&(u.face as usize)))).collect();
-    let report =
-        seam_diagnostics(body, &edges, 65, ContinuityTolerances { gap_mm: 1e-3, angle_deg: 1.0, curvature_per_mm: 1e-6, ..Default::default() })
-            .unwrap();
-    // The corner's vertices where its boundary turns: an end of two of its seams whose
-    // directions there differ.
-    let ends: Vec<(Vec3, Vec3, f64)> = report
-        .seams
-        .iter()
-        .flat_map(|s| {
-            let (p0, p1) = (s.points[0], *s.points.last().unwrap());
-            let d0 = (s.points[1] - p0).normalized().unwrap();
-            let d1 = (s.points[s.points.len() - 2] - p1).normalized().unwrap();
-            [(p0, d0, s.length), (p1, d1, s.length)]
-        })
-        .collect();
-    let turns =
-        |p: Vec3, d: Vec3| ends.iter().any(|(q, e, _)| q.dist(p) < 1e-6 && (d - *e).len() > 1e-6 && d.dot(*e) > -0.9998 && d.dot(*e) < 0.9998);
-    let (mut all, mut clear, mut n) = (0.0f64, 0.0f64, 0usize);
-    for s in &report.seams {
-        let (p0, p1) = (s.points[0], *s.points.last().unwrap());
-        let d0 = (s.points[1] - p0).normalized().unwrap();
-        let d1 = (s.points[s.points.len() - 2] - p1).normalized().unwrap();
-        let corner_end = if turns(p0, d0) {
-            Some(0.0)
-        } else if turns(p1, d1) {
-            Some(1.0)
-        } else {
-            None
-        };
-        for st in &s.stations {
-            all = all.max(st.curvature_jump_per_mm);
-            // Half a side per edge: `share` of the side is twice that of the edge.
-            if corner_end.is_none_or(|c| (st.edge_fraction - c).abs() >= 2.0 * share) {
-                clear = clear.max(st.curvature_jump_per_mm);
-                n += 1;
-            }
-        }
+/// The corner's seams as the ladder grades them ([`corner_continuity`]): every tangent seam
+/// within `within` of `near`, its curvature jump held `clear` mm from the vertices where seams
+/// turn (the hole's corners, where a round's own G1 seam with a face ends; the sides' middles
+/// and the centre, where the patches' spokes meet). Each seam is printed.
+fn graded(name: &str, body: &Body, near: Vec3, within: f64, clear: f64) -> CornerContinuity {
+    let c = corner_continuity(body, near, within, clear).unwrap();
+    eprintln!(
+        "{name}: {} seams, gap {:.1e} mm, angle {:.4}°, curvature jump {:.3e} per mm, {:.3e} clear of the turns ({} stations)",
+        c.seams.len(),
+        c.gap_mm,
+        c.normal_angle_deg,
+        c.curvature_jump_per_mm,
+        c.curvature_jump_clear_per_mm,
+        c.stations_clear
+    );
+    for s in &c.seams {
+        eprintln!(
+            "  seam {:>3} {:.2} mm: gap {:.1e}, angle {:.4}°, jump {:.3e}, clear {}",
+            s.edge,
+            s.length,
+            s.gap_mm.value,
+            s.normal_angle_deg.value,
+            s.curvature_jump_per_mm.value,
+            s.curvature_jump_clear_per_mm.map(|w| format!("{:.3e}", w.value)).unwrap_or_else(|| "-".into())
+        );
     }
-    (all, clear, n)
+    c
 }
 
 /// The G2 corner of 07/015, set back the default 7.5 (1.5 r): one closed valid solid of the box's
-/// six faces, the three rounds and the patch (10 faces, as the sphere corner's 07/009), within
-/// the box, whose volume lies between the corner cube's hull of the body's points on its faces
-/// (the body is convex) and the rounds' prisms, as the setback's own does; and across every
-/// seam of the patch the curvature jump, a fifth per mm on the rolling ball's, is under
-/// `CURVATURE_SHARE / r` clear of the hole's corners.
+/// six faces, the three rounds and the six patches about the centre (15 faces, as SMLib's own
+/// setback corner, 07/013), within the box; graded as the ladder grades it, every seam of the
+/// corner tangent and, 1.2 mm clear of the turns, curvature continuous to `CURVATURE_SHARE / r`
+/// where the rolling ball's corner jumps 1 / r; the patches' edges are the hole's own, so the
+/// gaps are rounding.
 #[test]
 fn the_box_corner_g2_patch_is_a_closed_solid_curvature_continuous_to_its_neighbours() {
     let (body, edges) = box_corner();
@@ -81,16 +54,23 @@ fn the_box_corner_g2_patch_is_a_closed_solid_curvature_continuous_to_its_neighbo
     let v = crate::validity::validity(&g2);
     assert!(v.ok(), "{:?}", v);
     let m = measure(&g2).unwrap();
-    let mb = measure(&ball).unwrap();
-    eprintln!("G2 corner: faces {} edges {} vertices {}, volume {:.6} (ball {:.6})", m.faces, m.edges, m.vertices, m.volume, mb.volume);
-    assert_eq!(m.faces, 10);
-    assert!((m.bbox.min - Vec3::ZERO).len() < 1e-6 && (m.bbox.max - Vec3::new(60.0, 40.0, 20.0)).len() < 1e-6, "{:?}", m.bbox);
-    let (all, clear, n) = corner_seams(&g2, 0.15);
-    let (ball_all, ball_clear, _) = corner_seams(&ball, 0.15);
     eprintln!(
-        "G2 corner seams: worst jump {all:.4e} per mm, {clear:.4e} clear of the corners ({n} stations); the ball's {ball_all:.4e} / {ball_clear:.4e}"
+        "G2 corner: faces {} edges {} vertices {}, volume {:.6} (ball {:.6})",
+        m.faces,
+        m.edges,
+        m.vertices,
+        m.volume,
+        measure(&ball).unwrap().volume
     );
-    assert!(clear <= CURVATURE_SHARE / 5.0, "{clear}");
+    assert_eq!((m.faces, m.edges, m.vertices), (15, 36, 23));
+    assert!((m.bbox.min - Vec3::ZERO).len() < 1e-6 && (m.bbox.max - Vec3::new(60.0, 40.0, 20.0)).len() < 1e-6, "{:?}", m.bbox);
+    let corner = Vec3::new(60.0, 40.0, 20.0);
+    let c = graded("G2 corner", &g2, corner, 15.0, 1.2);
+    let b = graded("ball corner", &ball, corner, 15.0, 1.2);
+    assert_eq!(c.seams.len(), 18);
+    assert!(c.gap_mm < 1e-9 && c.normal_angle_deg <= crate::fill::PATCH_ANGLE_TOL_DEG, "{c:?}");
+    assert!(c.stations_clear > 0 && c.curvature_jump_clear_per_mm <= CURVATURE_SHARE / 5.0, "{}", c.curvature_jump_clear_per_mm);
+    assert!(b.curvature_jump_clear_per_mm > 0.19);
 }
 
 /// Set back 8, as SMLib's own setback test: outside the corner cube [52, 60] x [32, 40] x
@@ -108,15 +88,16 @@ fn set_back_8_the_g2_corner_lies_between_the_hull_and_the_prisms() {
     let prisms = 512.0 - 225.0 * (1.0 - pi / 4.0) - 125.0 * (2f64.sqrt() - 1.0);
     eprintln!("G2 corner set back 8: volume {v:.6} in [{:.6}, {:.6}]", outside + 299.0201, outside + prisms);
     assert!(v > outside + 299.0201 && v < outside + prisms);
-    let (_, clear, _) = corner_seams(&g2, 0.15);
-    assert!(clear <= CURVATURE_SHARE / 5.0, "{clear}");
+    let c = graded("G2 corner set back 8", &g2, Vec3::new(60.0, 40.0, 20.0), 15.0, 1.2);
+    assert!(c.normal_angle_deg <= crate::fill::PATCH_ANGLE_TOL_DEG && c.curvature_jump_clear_per_mm <= CURVATURE_SHARE / 5.0, "{c:?}");
 }
 
 /// How far past the box (60, 40, 20) face `face` of `rec` reaches within its trim: the highest
 /// `max(x - 60, y - 40, z - 20)` on it, bracketed `(lo, hi)` from its exact surface alone, with no
-/// mesh. The surface (a polynomial B-spline) is cut into its Bézier patches and those split in
-/// four (de Casteljau, exact up to rounding) while they can still hold a higher point: a patch
-/// lies in the hull of its control points, so its controls' highest value bounds it from above
+/// mesh. The surface (a B-spline, polynomial or rational with positive weights) is cut into its
+/// Bézier patches and those split in four (de Casteljau on the homogeneous controls, exact up to
+/// rounding) while they can still hold a higher point: a patch lies in the hull of its
+/// (projected) control points, so their highest value bounds it from above
 /// (`hi`), and its corners are points of the surface (`lo`, where inside the trim). A patch
 /// clear of the trim (the face's pcurves, sampled densely in its (u, v)) is dropped; one whose
 /// hull cannot beat `lo` by 1e-12 is done; one split 18 times counts its hull in `hi`. Returns
@@ -124,9 +105,18 @@ fn set_back_8_the_g2_corner_lies_between_the_hull_and_the_prisms() {
 fn past_the_box(rec: &b::Brep, face: usize) -> (f64, f64, [f64; 2]) {
     use solidcraft_geom::bspline::{HPoint, segment};
     let f = &rec.faces[face];
-    let (b::Surface::Spline { u_knots, v_knots, points }, None) = (&f.surface, &f.nurbs) else {
-        panic!("face {face} is no polynomial B-spline: {:?}", std::mem::discriminant(&f.surface));
+    let surface = f.nurbs.as_ref().unwrap_or(&f.surface);
+    let (u_knots, v_knots, controls): (&Vec<f64>, &Vec<f64>, Vec<Vec<HPoint>>) = match surface {
+        b::Surface::Spline { u_knots, v_knots, points } => {
+            (u_knots, v_knots, points.iter().map(|r| r.iter().map(|c| HPoint::weighted(Vec3::from(*c), 1.0)).collect()).collect())
+        }
+        b::Surface::RationalSpline { u_knots, v_knots, homogeneous } => {
+            (u_knots, v_knots, homogeneous.iter().map(|r| r.iter().map(|h| HPoint { x: h[0], y: h[1], z: h[2], w: h[3] }).collect()).collect())
+        }
+        _ => panic!("face {face} is no B-spline: {:?}", std::mem::discriminant(surface)),
     };
+    assert!(controls.iter().flatten().all(|h| h.w > 0.0), "face {face}: a weight is not positive");
+    let point = |h: &HPoint| h.project().unwrap();
     let excess = |p: Vec3| (p.x - 60.0).max(p.y - 40.0).max(p.z - 20.0);
     // The trim: every loop's pcurves as one polygon set, inside by the even-odd rule.
     let mut rings: Vec<Vec<[f64; 2]>> = Vec::new();
@@ -160,38 +150,35 @@ fn past_the_box(rec: &b::Brep, face: usize) -> (f64, f64, [f64; 2]) {
             || [[u[0], v[0]], [u[1], v[0]], [u[0], v[1]], [u[1], v[1]]].into_iter().any(inside)
     };
     // The Bézier patches: each knot span in u, then in v (control point [i][j], i along u).
-    let (nu, nv) = (points.len(), points[0].len());
+    let (nu, nv) = (controls.len(), controls[0].len());
     let (p, q) = (u_knots.len() - nu - 1, v_knots.len() - nv - 1);
     let spans = |k: &[f64], n: usize, d: usize| {
         let mut x: Vec<f64> = k[d..=n].to_vec();
         x.dedup();
         x.windows(2).map(|w| [w[0], w[1]]).collect::<Vec<_>>()
     };
-    type Patch = (Vec<Vec<Vec3>>, [f64; 2], [f64; 2], u32);
+    type Patch = (Vec<Vec<HPoint>>, [f64; 2], [f64; 2], u32);
     let mut todo: Vec<Patch> = Vec::new();
     for su in spans(u_knots, nu, p) {
         // Each v column cut to the u span: (p + 1) x nv.
         let cols: Vec<Vec<HPoint>> = (0..nv)
             .map(|j| {
-                let c: Vec<HPoint> = (0..nu).map(|i| HPoint::weighted(Vec3::from(points[i][j]), 1.0)).collect();
+                let c: Vec<HPoint> = (0..nu).map(|i| controls[i][j]).collect();
                 segment(p, u_knots, &c, su[0], su[1]).unwrap().1
             })
             .collect();
         for sv in spans(v_knots, nv, q) {
-            let net: Vec<Vec<Vec3>> = (0..=p)
-                .map(|i| {
-                    segment(q, v_knots, &cols.iter().map(|c| c[i]).collect::<Vec<_>>(), sv[0], sv[1]).unwrap().1.iter().map(|h| h.xyz()).collect()
-                })
-                .collect();
+            let net: Vec<Vec<HPoint>> =
+                (0..=p).map(|i| segment(q, v_knots, &cols.iter().map(|c| c[i]).collect::<Vec<_>>(), sv[0], sv[1]).unwrap().1).collect();
             todo.push((net, su, sv, 0));
         }
     }
-    let half = |c: &[Vec3]| {
+    let half = |c: &[HPoint]| {
         let (mut l, mut r, mut pts) = (Vec::new(), Vec::new(), c.to_vec());
         while let (Some(&a), Some(&z)) = (pts.first(), pts.last()) {
             l.push(a);
             r.push(z);
-            pts = pts.windows(2).map(|w| w[0].lerp(w[1], 0.5)).collect();
+            pts = pts.windows(2).map(|w| (w[0] + w[1]) * 0.5).collect();
         }
         r.reverse();
         (l, r)
@@ -202,12 +189,12 @@ fn past_the_box(rec: &b::Brep, face: usize) -> (f64, f64, [f64; 2]) {
             continue;
         }
         for (i, j, uv) in [(0, 0, [u[0], v[0]]), (p, 0, [u[1], v[0]]), (0, q, [u[0], v[1]]), (p, q, [u[1], v[1]])] {
-            let e = excess(net[i][j]);
+            let e = excess(point(&net[i][j]));
             if e > lo && inside(uv) {
                 (lo, at) = (e, uv);
             }
         }
-        let hull = net.iter().flatten().map(|c| excess(*c)).fold(f64::NEG_INFINITY, f64::max);
+        let hull = net.iter().flatten().map(|c| excess(point(c))).fold(f64::NEG_INFINITY, f64::max);
         if hull <= lo + 1e-12 {
             continue;
         }
@@ -235,26 +222,35 @@ fn past_the_box(rec: &b::Brep, face: usize) -> (f64, f64, [f64; 2]) {
 }
 
 /// Long setbacks, where SMLib's own patch bulges past the faces (beyond about 2 r, by 0.25 at
-/// 3 r): the G2 patch is fitted to the faces' own planes along their curves and stays inside the
-/// box, G2 clear of the hole's corners. The body is convex (a box with its edges and corner
-/// rounded), and a convex face lies on the inner side of every tangent plane: the patch meets
-/// each of the box's planes tangentially along its seam there, so it reaches past none of them,
-/// up to rounding (1e-9 mm, the patch's seams lie on the planes to 1e-13). Measured on the
+/// 3 r): the G2 patches meet the faces' own planes along their curves and stay inside the box,
+/// tangent across every seam and curvature continuous clear of the turns by the corner's fade.
+/// The body is convex (a box with its edges and corner rounded), and a convex face lies on the
+/// inner side of every tangent plane: each patch meets the box's planes tangentially along its
+/// seams there, so it reaches past none of them, up to rounding (1e-9 mm). Measured on each
 /// patch's exact surface within its trim ([`past_the_box`]), not on a mesh of it.
 #[test]
 fn a_long_setback_keeps_the_g2_patch_inside_the_box() {
     let (body, edges) = box_corner();
+    let corner = Vec3::new(60.0, 40.0, 20.0);
     let mut wrong = Vec::new();
     for s in [11.0, 12.0, 13.0, 14.0, 15.0] {
-        let g2 = fillet_g2_corners(&body, &edges, 5.0, &[(Vec3::new(60.0, 40.0, 20.0), s)]).unwrap();
+        let g2 = fillet_g2_corners(&body, &edges, 5.0, &[(corner, s)]).unwrap();
         let rec = brep_record(&g2).unwrap();
-        let patch: Vec<usize> = (0..rec.faces.len()).filter(|f| matches!(rec.faces[*f].surface, b::Surface::Spline { .. })).collect();
-        assert_eq!(patch.len(), 1, "{s}: one patch");
-        let (lo, hi, at) = past_the_box(&rec, patch[0]);
-        let (_, clear, _) = corner_seams(&g2, 0.15);
-        eprintln!("set back {s}: past the box by {lo:.4e} at (u, v) {at:?} (at most {hi:.4e}), curvature jump clear of the corners {clear:.3e}");
-        if !(hi <= 1e-9 && clear <= CURVATURE_SHARE / 5.0) {
-            wrong.push(format!("set back {s}: past the box by {lo:.4e}..{hi:.4e} at (u, v) {at:?}, curvature jump {clear:.3e}"));
+        let patches: Vec<usize> =
+            (0..rec.faces.len()).filter(|f| matches!(rec.faces[*f].surface, b::Surface::Spline { .. } | b::Surface::RationalSpline { .. })).collect();
+        assert_eq!(patches.len(), 6, "{s}: six patches");
+        let (mut lo, mut hi, mut at) = (f64::NEG_INFINITY, f64::NEG_INFINITY, [f64::NAN; 2]);
+        for f in &patches {
+            let (l, h, a) = past_the_box(&rec, *f);
+            if l > lo {
+                (lo, at) = (l, a);
+            }
+            hi = hi.max(h);
+        }
+        let c = graded(&format!("set back {s}"), &g2, corner, 1.1 * s + 1.0, 0.15 * s);
+        eprintln!("set back {s}: {} patches, past the box by {lo:.4e} at (u, v) {at:?} (at most {hi:.4e})", patches.len());
+        if !(hi <= 1e-9 && c.normal_angle_deg <= crate::fill::PATCH_ANGLE_TOL_DEG && c.curvature_jump_clear_per_mm <= CURVATURE_SHARE / 5.0) {
+            wrong.push(format!("set back {s}: past the box by {lo:.4e}..{hi:.4e} at (u, v) {at:?}, {c:?}"));
         }
     }
     assert!(wrong.is_empty(), "{wrong:#?}");
@@ -280,7 +276,7 @@ fn a_box_with_every_edge_rounded_has_eight_g2_corners() {
     let m = measure(&g2).unwrap();
     eprintln!("eight G2 corners: {} faces, volume {:.4}, valid {}", m.faces, m.volume, v.ok());
     assert!(v.ok(), "{v:?}");
-    assert_eq!(m.faces, 6 + 12 + 8);
+    assert_eq!(m.faces, 6 + 12 + 8 * 6);
 }
 
 /// What the G2 corner cannot do is refused: a setback naming no corner, one that does not reach
@@ -308,8 +304,9 @@ fn notched() -> Body {
 }
 
 /// The notch's inner corner, three concave r5 rounds (ladder 07/019): set back 7.5 and filled,
-/// one closed valid solid with the faces the ball corner has, the patch's seams G2 clear of the
-/// hole's corners where the ball's jump 1/r.
+/// one closed valid solid with the ball corner's faces but its sphere (13), and the six
+/// patches; tangent across every seam and curvature continuous clear of the turns, where the
+/// ball's jump 1 / r.
 #[test]
 fn a_concave_corner_takes_the_g2_patch_too() {
     let body = notched();
@@ -320,14 +317,13 @@ fn a_concave_corner_takes_the_g2_patch_too() {
     let v = crate::validity::validity(&g2);
     assert!(v.ok(), "{v:?}");
     let (m, mb) = (measure(&g2).unwrap(), measure(&ball).unwrap());
-    let (_, clear, n) = corner_seams(&g2, 0.15);
-    let (_, ball_clear, _) = corner_seams(&ball, 0.15);
-    eprintln!(
-        "concave G2 corner: {} faces (ball {}), volume {:.4} (ball {:.4}), jump clear of the corners {clear:.3e} ({n} stations), ball's {ball_clear:.3e}",
-        m.faces, mb.faces, m.volume, mb.volume
-    );
-    assert_eq!(m.faces, mb.faces);
-    assert!(clear <= CURVATURE_SHARE / 5.0 && ball_clear > 0.19, "{clear} {ball_clear}");
+    let near = Vec3::new(40.0, 20.0, 10.0);
+    let c = graded("concave G2 corner", &g2, near, 11.0, 1.2);
+    let b = graded("concave ball corner", &ball, near, 11.0, 1.2);
+    eprintln!("concave G2 corner: {} faces (ball {}), volume {:.4} (ball {:.4})", m.faces, mb.faces, m.volume, mb.volume);
+    assert_eq!(m.faces, mb.faces - 1 + 6);
+    assert!(c.normal_angle_deg <= crate::fill::PATCH_ANGLE_TOL_DEG && c.curvature_jump_clear_per_mm <= CURVATURE_SHARE / 5.0, "{c:?}");
+    assert!(b.curvature_jump_clear_per_mm > 0.19);
 }
 
 /// The notch's outer corner, two convex rounds and a concave one: SMLib sets back only a corner
@@ -356,8 +352,10 @@ fn curvature_rounds_meet_at_a_g2_corner() {
     assert!(g2.validity().is_empty(), "{:?}", g2.validity());
     let v = crate::validity::validity(&g2);
     assert!(v.ok(), "{:?}", v);
-    let (_, clear, n) = corner_seams(&g2, 0.15);
-    let (_, smlib_clear, _) = corner_seams(&smlib_corner, 0.15);
+    let corner = Vec3::new(60.0, 40.0, 20.0);
+    let c = graded("curvature rounds, G2 corner", &g2, corner, 15.0, 1.2);
+    let (clear, n) = (c.curvature_jump_clear_per_mm, c.stations_clear);
+    let smlib_clear = graded("curvature rounds, SMLib's corner", &smlib_corner, corner, 15.0, 1.2).curvature_jump_clear_per_mm;
     assert!(n > 0 && clear <= CURVATURE_SHARE / 5.0, "{clear} over {n} stations");
     assert!(smlib_clear > 10.0 * CURVATURE_SHARE / 5.0, "SMLib's own corner patch: {smlib_clear}");
     // Both differ only within the setback cube (side 1.5 r = 7.5) at the corner.
