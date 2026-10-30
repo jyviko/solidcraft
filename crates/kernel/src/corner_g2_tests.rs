@@ -81,13 +81,20 @@ fn round_seams(body: &Body) -> f64 {
     report.seams.iter().flat_map(|s| s.stations.iter()).map(|st| st.curvature_jump_per_mm).fold(0.0, f64::max)
 }
 
+/// How far the explicit patches may miss G2 anywhere on a seam of the corner, its ends included
+/// (the hole's corners, the sides' middles, the centre): rounding, and the hole data's own (SMLib
+/// splits a section at its parameter's middle to 1e-9): an angle in degrees (the grading reads it
+/// as the arc cosine of the normals' dot, which cannot resolve less than about 1.5e-6°) and a
+/// curvature jump per mm.
+const EXACT_ANGLE_DEG: f64 = 1e-5;
+const EXACT_JUMP_PER_MM: f64 = 1e-9;
+
 /// The G2 corner of 07/015 at its default setback (1.25 x the ellipsoid's intercept sqrt 2 r,
-/// 8.84 at r5): one closed valid solid of the box's
-/// six faces, the three rounds and the six patches about the centre (15 faces, as SMLib's own
-/// setback corner, 07/013), within the box; graded as the ladder grades it, every seam of the
-/// corner tangent and, 1.2 mm clear of the turns, curvature continuous to `CURVATURE_SHARE / r`
-/// where the rolling ball's corner jumps 1 / r; the patches' edges are the hole's own, so the
-/// gaps are rounding.
+/// 8.84 at r5): one closed valid solid of the box's six faces, the three rounds and the six
+/// patches about the centre (15 faces, as SMLib's own setback corner, 07/013), within the box;
+/// graded as the ladder grades it, every seam of the corner G1 and G2 along its whole length,
+/// its ends included, where the rolling ball's corner jumps 1 / r; the patches' edges are the
+/// hole's own, so the gaps are rounding.
 #[test]
 fn the_box_corner_g2_patch_is_a_closed_solid_curvature_continuous_to_its_neighbours() {
     let (body, edges) = box_corner();
@@ -111,20 +118,19 @@ fn the_box_corner_g2_patch_is_a_closed_solid_curvature_continuous_to_its_neighbo
     let c = graded("G2 corner", &g2, corner, 15.0, 1.2);
     let b = graded("ball corner", &ball, corner, 15.0, 1.2);
     assert_eq!(c.seams.len(), 18);
-    assert!(c.gap_mm < 1e-9 && c.normal_angle_deg <= crate::fill::PATCH_ANGLE_TOL_DEG, "{c:?}");
-    assert!(c.stations_clear > 0 && c.curvature_jump_clear_per_mm <= CURVATURE_SHARE / 5.0, "{}", c.curvature_jump_clear_per_mm);
+    assert!(c.gap_mm < 1e-9 && c.normal_angle_deg <= EXACT_ANGLE_DEG && c.curvature_jump_per_mm <= EXACT_JUMP_PER_MM, "{c:?}");
     assert!(b.curvature_jump_clear_per_mm > 0.19);
     // G2 to each round along the whole seam, to its ends on the faces the rounds end on; and on
-    // a 20 mm box with r3 rounds the same, to its 1 / r share.
+    // a 20 mm box with r3 rounds the same.
     let rounds = round_seams(&g2);
     eprintln!("G2 corner: worst jump to the rounds along their whole seams {rounds:.4e} per mm");
-    assert!(rounds <= CURVATURE_SHARE / 5.0, "{rounds}");
+    assert!(rounds <= EXACT_JUMP_PER_MM, "{rounds}");
     let small = box_solid(Vec3::ZERO, Vec3::new(20.0, 20.0, 20.0)).unwrap();
     let edges = [Vec3::new(10.0, 20.0, 20.0), Vec3::new(20.0, 10.0, 20.0), Vec3::new(20.0, 20.0, 10.0)];
     let g2 = fillet_g2_corners(&small, &edges, 3.0, &[]).unwrap();
     let rounds = round_seams(&g2);
     eprintln!("G2 corner, 20 mm box at r3: worst jump to the rounds along their whole seams {rounds:.4e} per mm");
-    assert!(rounds <= CURVATURE_SHARE / 3.0, "{rounds}");
+    assert!(rounds <= EXACT_JUMP_PER_MM, "{rounds}");
 }
 
 /// Set back 8, as SMLib's own setback test. The rounds keep their circular sections up to where
@@ -162,7 +168,7 @@ fn set_back_8_the_g2_corner_is_the_ball_corner_outside_its_eased_cube() {
     assert!(inside >= least && inside <= a.powi(3), "{inside} not in [{least}, {}]", a.powi(3));
     assert!((m.bbox.min - Vec3::ZERO).len() < 1e-6 && (m.bbox.max - corner).len() < 1e-6, "{:?}", m.bbox);
     let c = graded("G2 corner set back 8", &g2, corner, 15.0, 1.2);
-    assert!(c.normal_angle_deg <= crate::fill::PATCH_ANGLE_TOL_DEG && c.curvature_jump_clear_per_mm <= CURVATURE_SHARE / 5.0, "{c:?}");
+    assert!(c.normal_angle_deg <= EXACT_ANGLE_DEG && c.curvature_jump_per_mm <= EXACT_JUMP_PER_MM, "{c:?}");
 }
 
 /// How far past the box (60, 40, 20) face `face` of `rec` reaches within its trim: the highest
@@ -296,7 +302,7 @@ fn past_the_box(rec: &b::Brep, face: usize) -> (f64, f64, [f64; 2]) {
 
 /// Long setbacks, where SMLib's own patch bulges past the faces (beyond about 2 r, by 0.25 at
 /// 3 r): the G2 patches meet the faces' own planes along their curves and stay inside the box,
-/// tangent across every seam and curvature continuous clear of the turns by the corner's fade.
+/// G1 and G2 across every seam along its whole length.
 /// The body is convex (a box with its edges and corner rounded), and a convex face lies on the
 /// inner side of every tangent plane: each patch meets the box's planes tangentially along its
 /// seams there, so it reaches past none of them, up to rounding (1e-9 mm). Measured on each
@@ -322,10 +328,7 @@ fn a_long_setback_keeps_the_g2_patch_inside_the_box() {
         let c = graded(&format!("set back {s}"), &g2, corner, 1.1 * s + 1.0, 0.15 * s);
         eprintln!("set back {s}: {} patches, past the box by {lo:.4e} at (u, v) {at:?} (at most {hi:.4e})", patches.len());
         let rounds = round_seams(&g2);
-        if !(hi <= 1e-9
-            && rounds <= CURVATURE_SHARE / 5.0
-            && c.normal_angle_deg <= crate::fill::PATCH_ANGLE_TOL_DEG
-            && c.curvature_jump_clear_per_mm <= CURVATURE_SHARE / 5.0)
+        if !(hi <= 1e-9 && rounds <= EXACT_JUMP_PER_MM && c.normal_angle_deg <= EXACT_ANGLE_DEG && c.curvature_jump_per_mm <= EXACT_JUMP_PER_MM)
         {
             wrong.push(format!("set back {s}: past the box by {lo:.4e}..{hi:.4e} at (u, v) {at:?}, to the rounds {rounds:.3e}, {c:?}"));
         }
@@ -420,9 +423,9 @@ fn notched() -> Body {
 }
 
 /// The notch's inner corner, three concave r5 rounds (ladder 07/019): set back 7.5 and filled
-/// (the default, 8.84 and its ease 1.55, is longer than the notch's 10 mm edge), one closed valid solid with the ball corner's faces but its sphere (13), and the six
-/// patches; tangent across every seam and curvature continuous clear of the turns, where the
-/// ball's jump 1 / r.
+/// (the default, 8.84 and its ease 1.55, is longer than the notch's 10 mm edge), one closed valid
+/// solid with the ball corner's faces but its sphere (12) and the six patches; G1 and G2 across
+/// every seam along its whole length, where the ball jumps 1 / r.
 #[test]
 fn a_concave_corner_takes_the_g2_patch_too() {
     let body = notched();
@@ -438,7 +441,7 @@ fn a_concave_corner_takes_the_g2_patch_too() {
     let b = graded("concave ball corner", &ball, near, 11.0, 1.2);
     eprintln!("concave G2 corner: {} faces (ball {}), volume {:.4} (ball {:.4})", m.faces, mb.faces, m.volume, mb.volume);
     assert_eq!(m.faces, mb.faces - 1 + 6);
-    assert!(c.normal_angle_deg <= crate::fill::PATCH_ANGLE_TOL_DEG && c.curvature_jump_clear_per_mm <= CURVATURE_SHARE / 5.0, "{c:?}");
+    assert!(c.normal_angle_deg <= EXACT_ANGLE_DEG && c.curvature_jump_per_mm <= EXACT_JUMP_PER_MM, "{c:?}");
     assert!(b.curvature_jump_clear_per_mm > 0.19);
 }
 
@@ -460,7 +463,7 @@ fn a_mixed_convexity_corner_is_refused() {
 /// corner: SMLib's own corner patch between them is only tangent to the rounds, its curvature
 /// jumping across their seams (it showed as a dome on the corner), so the corner is the G2 patch
 /// instead, filled between the curvature rounds' setback sections: one closed valid solid, the
-/// patch curvature-continuous to every round and face round it clear of the hole's corners.
+/// patches curvature-continuous to every round and face round them along the whole of each seam.
 #[test]
 fn curvature_rounds_meet_at_a_g2_corner() {
     let (body, edges) = box_corner();
@@ -473,10 +476,11 @@ fn curvature_rounds_meet_at_a_g2_corner() {
     let c = graded("curvature rounds, G2 corner", &g2, corner, 15.0, 1.2);
     let (clear, n) = (c.curvature_jump_clear_per_mm, c.stations_clear);
     let smlib_clear = graded("curvature rounds, SMLib's corner", &smlib_corner, corner, 15.0, 1.2).curvature_jump_clear_per_mm;
-    assert!(n > 0 && clear <= CURVATURE_SHARE / 5.0, "{clear} over {n} stations");
-    assert!(smlib_clear > 10.0 * CURVATURE_SHARE / 5.0, "SMLib's own corner patch: {smlib_clear}");
+    assert!(n > 0 && clear <= EXACT_JUMP_PER_MM && c.curvature_jump_per_mm <= EXACT_JUMP_PER_MM && c.normal_angle_deg <= EXACT_ANGLE_DEG, "{c:?}");
+    assert!(smlib_clear > 1e-3, "SMLib's own corner patch: {smlib_clear}");
     // Both differ only within the cube of the setback and its ease at the corner.
     let s = fillet_g2_corner_setback(&body, corner, 5.0).unwrap().unwrap();
     let (a, b) = (measure(&g2).unwrap().volume, measure(&smlib_corner).unwrap().volume);
     assert!((a - b).abs() < (s.setback + s.ease).powi(3), "{a} vs {b}");
 }
+

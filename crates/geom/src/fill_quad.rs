@@ -1,149 +1,107 @@
-//! Filling an N-sided hole with N four-sided B-spline patches about a centre point, each meeting
-//! the faces beside the hole and its two neighbouring patches with G2: the corner where three or
-//! more rounds meet, set back so that each round ends at its cross-section.
+//! Filling the hole of a set-back corner where three rounds meet with six biquintic patches
+//! about a centre point, each meeting the faces beside the hole and its two neighbouring patches
+//! with G2 exactly: built, not fitted.
 //!
-//! The construction (the hole split into quadrilaterals about a centre: J. Hahn, "Filling
-//! polygonal holes with rectangular patches", *Theory and Practice of Geometric Modeling*, 1989;
-//! J. A. Gregory and J. Zhou, "Filling polygonal holes with bicubic patches", CAGD 11, 1994; the
-//! patches' insides fixed by minimising a fairness energy under the continuity conditions, as in
-//! H. P. Moreton and C. H. Séquin, "Functional optimization for fair surface design", SIGGRAPH
-//! 1992):
+//! The hole has six sides, alternately a round's section (a straight edge's round, which near its
+//! section is the section moved along the edge, its *rail*) and a planar face's curve between
+//! two rounds' contact lines, each split at its middle `M_k` into two edges that are single
+//! quintic spans (a set-back corner's hole from SMLib is so: the eased setback, whose sections
+//! meet the planes with no curvature across and whose face curves meet the contact lines
+//! curvature-continuously). Patch `k` has the corners `V_k` (where side `k` starts), `M_k`, the
+//! centre `C` and `M_{k−1}`: on the unit square, edge `2k` (`V_k → M_k`) along `v = 0`, spoke `k`
+//! (`M_k → C`) up `u = 1`, spoke `k − 1` along `v = 1` and edge `2k − 1` run back up `u = 0`. Each
+//! hole edge is its patch's boundary row exactly, and each spoke one quintic shared by the two
+//! patches beside it.
 //!
-//! - **The split.** The hole's loop has `2N` edges: its `N` sides, each two edges meeting
-//!   smoothly at the side's middle `M_k` (a set-back corner's hole is so: SMLib splits each side
-//!   there). Patch `k` has the corners `V_k` (where side `k` starts), `M_k`, the centre `C` and
-//!   `M_{k−1}`: on the unit square, edge `2k` (`V_k → M_k`) along `v = 0`, spoke `k`
-//!   (`M_k → C`) up `u = 1`, spoke `k − 1` (`M_{k−1} → C`) along `v = 1` and edge `2k − 1` run
-//!   back (`V_k → M_{k−1}`) up `u = 0`. Each edge is its patch's boundary row exactly — the
-//!   hole's own curve, rational where it is (a round's section is a circular arc), in its own
-//!   parameter up to a linear rational change (the standard form, end weights one: G. Farin,
-//!   *Curves and Surfaces for CAGD*, §13.3), so the edge's pcurve on its patch is a line, or a
-//!   rational line.
-//! - **The spaces.** A patch's net is in the spline space, each way, that holds its two
-//!   opposite sides: the boundary edge (raised to the common degree, keeping its continuity) and
-//!   the spoke, whose space `Sp` (uniform, degree `q`) every patch shares. The weights are the
-//!   boundary rows' own and one elsewhere, so `S = F / W` with `W` fixed and every derivative of
-//!   `S` linear in the control points (NURBS Book §4.4, the quotient rule).
-//! - **The unknowns.** `S_k = (F⁰_k + d_k) / W_k`: `F⁰_k` is fixed, the boundary rows and a
-//!   straight spoke from each `M` to a first centre, Coons-blended inside (S. A. Coons, 1967);
-//!   `d_k` is a spline in `Sp ⊗ Sp` that vanishes on the hole's edges, whose coefficients on a
-//!   spoke are that spoke's own (shared by the two patches beside it, so the spoke is one curve
-//!   in both) and whose corner at `C` is the centre's (shared by all). The hole's edges never
-//!   move; everything else does.
-//! - **The conditions**, by least squares at Gauss stations along every edge and spoke, with
-//!   the frames frozen at the last solution and the fit repeated (Gauss–Newton):
-//!   - G1 to a neighbour: `n·∂S/∂ν = 0` (`ν` across the edge, `n` its normal); a weak Hermite
-//!     row `∂S/∂ν = s·w` (`w` the neighbour's leave direction, `s` the edge's speed) keeps the
-//!     patch leaving into itself.
-//!   - G2 to a neighbour: with G1, the surfaces share the curve, its tangent plane and so the
-//!     normal curvature along it and the twist term, and are G2 exactly when their normal
-//!     curvatures agree in one direction across it (L. Pegna and F.-E. Wolter, "Geometrical
-//!     criteria to guarantee curvature continuity of blend surfaces", J. Mech. Des. 114, 1992,
-//!     the linkage curve theorem): `n·∂²S/∂ν² = II(∂S/∂ν, ∂S/∂ν)`, `II` the neighbour's second
-//!     fundamental form, `∂S/∂ν` from the last solution.
-//!   - Across a spoke, between patches `k` (`∂/∂u` across) and `k + 1` (`∂/∂v` across): both
-//!     cross derivatives and the spoke's own tangent in the tangent plane of the last solution
-//!     (G1), and the linkage condition between the two patches: `II_k(X, X) = II_{k+1}(X, X)` for
-//!     `X = ∂S_k/∂u`, written in patch `k + 1`'s derivatives as `X = α ∂S_{k+1}/∂v + β ∂S/∂t`;
-//!     a weak row asks the two cross derivatives to be opposite across the spoke's tangent.
-//!   - A small thin-plate energy `∫∫ |S_uu|² + 2|S_uv|² + |S_vv|²` per patch decides what the
-//!     conditions leave free.
-//! - **The hole's corners.** At `V_k` a round's section meets a face's curve where the round's
-//!   own G1-only seam with that face ends. No surface is G2 to both there: the section's own
-//!   curvature (1 / r of a round) is the patch's normal curvature along it, and so its normal
-//!   curvature across the face's curve, where the face (a plane: 0) asks for its own; and a
-//!   patch tangent to a plane along a curve that turns in it (curvature `k_φ`) cannot be G2 to a
-//!   round along a section square to that curve — its normal curvature along the round's axis
-//!   leaves the round's by about `k_φ·y / r` at `y` from the corner. The G2 rows of both edges at
-//!   a corner fade in (a smoothstep) over [`FADE_SHARE`] of their side from it, where the patch
-//!   passes from one curvature to the other; G1 is compatible there and held everywhere. The
-//!   conflict goes away only when the hole's conditions agree at its corners: a round whose
-//!   section eases to the face's curvature at its setback, and a face curve leaving the contact
-//!   line without turning (zero curvature) — a property of the set-back rounds, not of the fill.
-//! - **Refinement**: `Sp` starts with [`MIN_SPANS`] spans and doubles, up to
-//!   [`MAX_QUAD_SPANS`], until every station within the fades' bounds is within the tolerances
-//!   (normals and normal curvatures, at the hole's edges and across the spokes); otherwise
-//!   "not supported yet", with how close the finest fill came.
+//! A biquintic net is four 3 × 3 corner blocks, and the block at a corner is the patch's
+//! derivatives `∂ᵘⁱ∂ᵛʲS`, `i, j ≤ 2` there (Hermite data). Along each side of a patch, its
+//! position, cross derivative and second cross derivative are quintics fixed by the blocks at the
+//! side's two ends; so the patches are G2 to everything round them when, along every side, those
+//! three curves meet the side's conditions, and the blocks at every corner are the ones both sides
+//! there ask for (the corner compatibility of Hermite data: the twist and its derivatives).
 //!
-//! Input is hostile: sizes are capped and every evaluation checked; nothing here panics.
+//! - **Beside a planar face** a patch is G2 exactly when its position, cross derivative and second
+//!   cross derivative lie in the plane: its rows 0–2 are in it.
+//! - **Beside a round** (the section moved along the rail `e`, to the second order) a patch is G2
+//!   exactly when its cross derivatives are `a(t)·e` and `c(t)·e` (the patch is the round
+//!   reparameterised to the second order across the section: `S(t, v) = R(t, a v + c v²/2)`, the
+//!   round `R(t, w) = E(t) + w e`; its normal curvature along `e` is the round's, zero, and its
+//!   twist term the round's, zero). `a` and `c` are scalar quintics; at the hole's corner `a e` is
+//!   the face curve's tangent there and `c e` its second derivative (both along the contact line).
+//! - **Across a spoke**, between patches `A = S_k` (`u` across) and `B = S_{k+1}` (`v` across),
+//!   the regular reparameterisation: `B_v = −A_u + β A_t`, `B_vv = A_uu − 2β A_ut + β² A_tt + δ A_t`
+//!   with `β = 2cos(2π/6)·t = t` and `δ = t` (`t` along the spoke from `M_k`): G1 and G2 by a
+//!   reparameterisation (`B = A ∘ φ` to the second order), each side a quintic. At `M_k` it ties
+//!   the two halves of the side's cross derivatives together: their slopes towards `M_k` add up to
+//!   the spoke's tangent there (a round's `a` has a kink at `M_k`).
+//! - **The centre** is a G2 enclosure: the patches' blocks there follow one another round `C`
+//!   by the spokes' relations; the first patch's block is free but for the closure, and its
+//!   orders 0–2 (the tangent plane, one quadratic form and the regular star of spoke tangents,
+//!   opposite spokes in one line) close round the centre by themselves. Orders 3–4 close but for
+//!   one vector condition on the patch's own third derivatives and one on the sides' middles (an
+//!   alternating sum of the cross derivatives' slopes there, zero at a symmetric corner); the
+//!   first is met by the centre's block, the second by the planar sides' second cross
+//!   derivatives' slopes at `M`.
+//!
+//! What the conditions leave free is chosen by explicit rules, never fitted: the centre on the
+//! curves between opposite middles, the spoke tangents the regular star of the centre's chords to
+//! the middles, the quadratic form from the spokes' heights over the tangent plane (each the cubic
+//! through its ends), each spoke's speed at its middle its chord, its second derivative there the
+//! quartic's through its other end data, each round side's `a` and `c` the cubics through their
+//! end data, and the centre's third derivatives those that make the spokes' cross derivatives
+//! quartics on average round the centre. Nothing is solved but four small exact systems (3 × 3 and
+//! one 9 × 9), and every condition holds to the input's own rounding.
+//!
+//! Input is hostile: sizes are fixed and every value checked; nothing here panics.
 
 use crate::Vec3;
 use crate::bspline::{HPoint, NurbsSurface, SplineError, SplineResult, invalid};
-use crate::fill::Band;
-use crate::spline_space::{Cond, Interpolant, Linear, Space, embed};
 
-/// Most corners (patches) of a hole.
-pub const MAX_QUAD_CORNERS: usize = 8;
-/// Most spans of the spoke space.
-pub const MAX_QUAD_SPANS: usize = 16;
-/// Fewest spans of the spoke space (the first fill tried).
-const MIN_SPANS: usize = 4;
-/// The lowest degree of the patches: quartic, so that the curvature conditions are not met by
-/// pieces of quadratics.
-const MIN_DEGREE: usize = 4;
-/// The share of a corner's fade, from the corner, where its G2 rows are not asked at all (the
-/// smoothstep runs over the rest).
-const FADE_ZERO: f64 = 0.5;
-/// Weight of the weak rows (Hermite directions, cross speeds at spokes) against the G1 rows.
-const WEAK: f64 = 0.02;
-/// Weight of the thin-plate energy against the conditions (each made dimensionless).
-const FAIRNESS: f64 = 1e-4;
-/// Rounds of freezing the frames at the last solution and solving again.
-const ROUNDS: usize = 6;
-/// Stations along each edge and spoke where the fill is measured.
-const CHECKS: usize = 64;
-/// Most unknown points one solve takes (its normal equations are dense).
-const MAX_UNKNOWN_POINTS: usize = 20_000;
-/// Four-point Gauss–Legendre nodes and weights on `[−1, 1]`.
-const GAUSS4: [(f64, f64); 4] = [
-    (-0.861_136_311_594_052_6, 0.347_854_845_137_453_8),
-    (-0.339_981_043_584_856_3, 0.652_145_154_862_546_2),
-    (0.339_981_043_584_856_3, 0.652_145_154_862_546_2),
-    (0.861_136_311_594_052_6, 0.347_854_845_137_453_8),
-];
+/// Sides of the hole: three rounds' sections and three faces' curves, alternately.
+pub const QUAD_SIDES: usize = 6;
+const N: usize = QUAD_SIDES;
+/// The patches' degree each way.
+pub const QUAD_DEGREE: usize = 5;
+/// The regular reparameterisation across a spoke: `β(t) = BETA·t` (`2cos(2π/6)`) and
+/// `δ(t) = DELTA·t`, which closes the centre's orders 0–2 by themselves.
+const BETA: f64 = 1.0;
+const DELTA: f64 = 1.0;
 
-/// One edge of the hole, from the loop's vertex before it to the one after, on `[0, 1]`: a
-/// B-spline, rational when `weights` is not empty (positive, the first and last one: the standard
-/// form, which a caller reaches from any rational piece by a linear rational change of parameter).
+/// What a hole edge has beside it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Beside {
+    /// The planar face `normal·p = offset` (`normal` a unit vector).
+    Plane { normal: Vec3, offset: f64 },
+    /// A round that, beside the edge (one of its sections), is the section moved along `rail` to
+    /// the second order: its cross derivative along `rail` everywhere on the edge, with no normal
+    /// curvature along it and no twist. `rail` is a unit vector into the hole.
+    Rail { rail: Vec3 },
+}
+
+/// One edge of the hole, from the loop's vertex before it to the one after, on `[0, 1]`: one
+/// polynomial span of degree at most [`QUAD_DEGREE`] (`weights` empty or all one).
 #[derive(Clone, Debug, PartialEq)]
 pub struct QuadEdge {
     pub degree: usize,
     pub knots: Vec<f64>,
     pub points: Vec<Vec3>,
     pub weights: Vec<f64>,
-    /// The plane `n·p = c` of the face beside the edge, `(n, c)` with `n` a unit normal, when
-    /// that face is planar: the patch's second row of control points beside the edge is held in
-    /// it exactly, so the patch is tangent to the plane all along the edge ([`quad_fill`]).
-    pub plane: Option<(Vec3, f64)>,
+    pub beside: Beside,
 }
 
-/// What the face beside an edge is at a point of it.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Frame {
-    /// The face's unit normal (either sign; the form is about it).
-    pub normal: Vec3,
-    /// The unit direction the face leaves the edge in, away from it (into the hole).
-    pub leave: Vec3,
-    /// The face's second fundamental form about `normal` on the frame `(t, leave)`, `t` the
-    /// edge's unit tangent the loop's way: `[II(t, t), II(t, leave), II(leave, leave)]`.
-    pub form: [f64; 3],
-}
-
-/// What the fill is asked for.
+/// The tolerances the hole's own data must meet the construction's conditions within.
 #[derive(Clone, Copy, Debug)]
 pub struct QuadSpec {
-    /// How far apart two edges' ends may be where they meet (the record's tolerance: each edge
-    /// is its patch's row as it is, so the patches meet there within it).
+    /// How far apart two edges' ends may be where they meet, and an edge from its plane.
     pub tol: f64,
-    /// How far (radians) a patch's normal may turn from a neighbour's, or from the next patch's.
+    /// How far (radians) a direction may be from the one the conditions ask for: a face curve's
+    /// tangent from its round's rail at the hole's corner, a section's from its plane there, the
+    /// two halves of a side at its middle.
     pub angle_tol: f64,
-    /// How far (1/length) its normal curvature across an edge or a spoke may be from the other
-    /// side's, clear of the hole's corners' fades.
+    /// How far (1/length) a curvature may be from the one the conditions ask for: a section's
+    /// across its plane at the hole's corner (the eased setback's zero), a face curve's at the
+    /// contact line.
     pub curvature_tol: f64,
-    /// How far from each corner of the hole (and from the centre) the G2 conditions fade in:
-    /// the stretch where the patch passes from one neighbour's curvature to the other's; G2 is
-    /// held beyond it.
-    pub fade: f64,
 }
 
 /// A spoke: from its side's middle `M_k` (t = 0) to the centre (t = 1).
@@ -154,24 +112,6 @@ pub struct Spoke {
     pub points: Vec<Vec3>,
 }
 
-/// The worst of one measure along an edge or spoke, and where (a share of it from its start).
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub struct Worst {
-    pub value: f64,
-    pub at: f64,
-}
-
-/// What the fill achieves along one edge of the hole or one spoke.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub struct SeamFit {
-    /// The angle (radians) between the two sides' normals.
-    pub angle: Worst,
-    /// The difference (1/length) of their normal curvatures across, everywhere, and clear of the
-    /// hole's corners' fades.
-    pub curvature: Worst,
-    pub curvature_clear: Worst,
-}
-
 /// The fill: patch `k` on the unit square as the module documentation lays it out.
 #[derive(Clone, Debug, PartialEq)]
 pub struct QuadFill {
@@ -179,1459 +119,674 @@ pub struct QuadFill {
     /// Spoke `k` from `M_k` to the centre.
     pub spokes: Vec<Spoke>,
     pub centre: Vec3,
-    /// Per edge of the hole, then per spoke: what the fill achieves across it.
-    pub edges: Vec<SeamFit>,
-    pub spoke_fits: Vec<SeamFit>,
-    /// Spans of the spoke space.
-    pub spans: usize,
 }
 
-/// Fill the hole `edges` (2N of them, N from 3 to [`MAX_QUAD_CORNERS`], each starting where the
-/// one before ends; edge `2k` starts at a corner of the hole and meets edge `2k + 1` smoothly)
-/// with N patches meeting each edge's neighbour and each other with G2 (module docs).
-/// `frames(j, ts)` gives the face beside edge `j` at its parameters `ts`.
-pub fn quad_fill(edges: &[QuadEdge], frames: &mut dyn FnMut(usize, &[f64]) -> Result<Vec<Frame>, String>, spec: &QuadSpec) -> SplineResult<QuadFill> {
-    let m = edges.len();
-    let n = m / 2;
-    if !m.is_multiple_of(2) || !(3..=MAX_QUAD_CORNERS).contains(&n) {
-        return Err(SplineError::Unsupported(format!("a hole of {m} edges ({} to {} corners, two edges a side)", 3, MAX_QUAD_CORNERS)));
-    }
+/// A curve's value and first two derivatives at a point.
+type Jet = [Vec3; 3];
+/// A patch's derivatives at a corner: `b[i][j] = ∂ᵘⁱ∂ᵛʲS`.
+type Block = [[Vec3; 3]; 3];
+/// A scalar's value and first two derivatives at a point.
+type SJet = [f64; 3];
+const ZERO_BLOCK: Block = [[Vec3::ZERO; 3]; 3];
+
+/// Patch `k`'s corner blocks: at `V_k` (0, 0), `M_k` (1, 0), `M_{k−1}` (0, 1) and the centre.
+#[derive(Clone, Copy)]
+struct Blocks {
+    v: Block,
+    m: Block,
+    p: Block,
+    c: Block,
+}
+
+/// Fill the hole `edges` (twelve of them, each starting where the one before ends; edge `2k`
+/// starts at a corner of the hole and meets edge `2k + 1` smoothly at its side's middle; the
+/// sides alternately beside a round and a planar face) with six biquintic patches G2 to the
+/// faces beside the edges and to each other (module docs). Holes of other shapes, rational or
+/// multi-span edges, and data that misses the construction's conditions beyond `spec` are
+/// refused.
+pub fn quad_fill(edges: &[QuadEdge], spec: &QuadSpec) -> SplineResult<QuadFill> {
     let positive = |x: f64| x.is_finite() && x > 0.0;
-    if !(positive(spec.tol) && positive(spec.angle_tol) && positive(spec.curvature_tol) && positive(spec.fade)) {
+    if !(positive(spec.tol) && positive(spec.angle_tol) && positive(spec.curvature_tol)) {
         return invalid("the fill's tolerances must be positive");
     }
-    let curves: Vec<Curve> = edges.iter().map(Curve::new).collect::<SplineResult<_>>()?;
-    for k in 0..m {
-        let (Some(a), Some(b)) = (curves.get(k), curves.get((k + 1) % m)) else { return invalid("edges") };
-        let gap = a.point(1.0)?.dist(b.point(0.0)?);
-        if !(gap <= spec.tol) {
-            return invalid(format!("edge {} does not start where edge {k} ends ({gap:e} apart)", (k + 1) % m));
-        }
+    if edges.len() != 2 * N {
+        return Err(SplineError::Unsupported(format!(
+            "a hole of {} edges (the explicit corner takes six sides, three rounds' and three faces', two edges a side)",
+            edges.len()
+        )));
     }
-    let q = curves.iter().map(|c| c.space.degree()).max().unwrap_or(1).max(MIN_DEGREE);
-    let degree_cap = crate::bspline::MAX_SPLINE_DEGREE;
-    if q > degree_cap {
-        return Err(SplineError::Unsupported(format!("a hole edge of degree {q}")));
-    }
-    // The frames along every edge, at the stations each level asks for (cached per parameter).
-    let mut cache: Vec<Vec<(f64, Frame)>> = vec![Vec::new(); m];
-    let mut frame_at = |j: usize, ts: &[f64]| -> SplineResult<Vec<Frame>> {
-        let have = cache.get(j).ok_or_else(|| SplineError::Invalid("edge".into()))?;
-        let missing: Vec<f64> = ts.iter().copied().filter(|t| !have.iter().any(|(s, _)| s == t)).collect();
-        if !missing.is_empty() {
-            let got = frames(j, &missing).map_err(SplineError::Invalid)?;
-            if got.len() != missing.len() || !got.iter().all(finite_frame) {
-                return invalid(format!("edge {j} has no finite frames"));
-            }
-            if let Some(slot) = cache.get_mut(j) {
-                slot.extend(missing.into_iter().zip(got));
-            }
-        }
-        let have = cache.get(j).ok_or_else(|| SplineError::Invalid("edge".into()))?;
-        ts.iter().map(|t| have.iter().find(|(s, _)| s == t).map(|(_, f)| *f).ok_or_else(|| SplineError::Invalid("frame".into()))).collect()
-    };
-    let lengths: Vec<f64> = curves.iter().map(|c| c.length()).collect::<SplineResult<_>>()?;
-    // A first centre: from each side's middle, along the direction its face leaves the hole
-    // in, as far as the middles' mean is, averaged — a point near where the fill will pass,
-    // not inside the body as the middles' mean of a convex corner is.
-    let mut middles = Vec::with_capacity(n);
-    for k in 0..n {
-        let curve = curves.get(2 * k).ok_or_else(|| SplineError::Invalid("edge".into()))?;
-        let f = frame_at(2 * k, &[1.0])?.first().copied().ok_or_else(|| SplineError::Invalid("frame".into()))?;
-        middles.push((curve.point(1.0)?, f.leave));
-    }
-    let mean = middles.iter().fold(Vec3::ZERO, |s, (p, _)| s + *p) * (1.0 / n as f64);
-    let centre0 = middles.iter().fold(Vec3::ZERO, |s, (p, l)| s + *p + *l * p.dist(mean)) * (1.0 / n as f64);
-    let mut spans = MIN_SPANS;
-    let mut best: Option<(f64, String)> = None;
-    while spans <= MAX_QUAD_SPANS {
-        let quilt = Quilt::new(&curves, q, spans, centre0, spec.fade, spec.curvature_tol)?;
-        if quilt.unknowns > MAX_UNKNOWN_POINTS {
-            break;
-        }
-        let stations = quilt.stations(&lengths, &mut frame_at)?;
-        let x = quilt.solve(&stations)?;
-        let fill = quilt.output(&x)?;
-        let (edges_fit, spokes_fit) = quilt.measure(&x, &lengths, &mut frame_at)?;
-        let worst = |f: &[SeamFit], g: fn(&SeamFit) -> f64| f.iter().map(g).fold(0.0f64, f64::max);
-        let angle = worst(&edges_fit, |s| s.angle.value).max(worst(&spokes_fit, |s| s.angle.value));
-        let curvature = worst(&edges_fit, |s| s.curvature_clear.value).max(worst(&spokes_fit, |s| s.curvature_clear.value));
-        if angle <= spec.angle_tol && curvature <= spec.curvature_tol {
-            return Ok(QuadFill { edges: edges_fit, spoke_fits: spokes_fit, spans, ..fill });
-        }
-        let score = angle / spec.angle_tol + curvature / spec.curvature_tol;
-        if best.as_ref().is_none_or(|(s, _)| score < *s) {
-            best = Some((
-                score,
-                format!(
-                    "with {spans} spans a side the patches turn {:.4}° from their neighbours (tolerance {:.4}°) and miss their curvature by {curvature:e} (tolerance {:e})",
-                    angle.to_degrees(),
-                    spec.angle_tol.to_degrees(),
-                    spec.curvature_tol
-                ),
-            ));
-        }
-        spans *= 2;
-    }
-    Err(SplineError::Unsupported(format!(
-        "filling this hole with patches curvature-continuous to its neighbours and each other: {}",
-        best.map(|(_, m)| m).unwrap_or_else(|| "the fill needs more control points than one solve takes".into())
-    )))
+    let hole = Hole::new(edges, spec)?;
+    hole.fill()
 }
 
-fn finite_frame(f: &Frame) -> bool {
-    f.normal.is_finite() && f.leave.is_finite() && f.form.iter().all(|x| x.is_finite())
+/// A half side, from its hole corner `V` (t = 0) to its side's middle `M` (t = 1): a quintic
+/// Bézier and what is beside it.
+#[derive(Clone, Copy)]
+struct Half {
+    bez: [Vec3; 6],
+    beside: Beside,
 }
 
-/// An edge as the fill holds it: its space and homogeneous coefficients (`w·P` and `w`).
-#[derive(Clone, Debug)]
-struct Curve {
-    space: Space,
-    h: Vec<Vec3>,
-    w: Vec<f64>,
-    plane: Option<(Vec3, f64)>,
-}
-
-impl Curve {
-    fn new(e: &QuadEdge) -> SplineResult<Curve> {
-        let space = Space::new(e.degree, e.knots.clone())?;
-        if space.domain() != [0.0, 1.0] {
-            return invalid("a hole edge must be on [0, 1]");
+impl Half {
+    /// The value and first two derivatives at the corner (`end` false) or the middle.
+    fn jet(&self, end: bool) -> Jet {
+        let b = &self.bez;
+        if end {
+            [b[5], (b[5] - b[4]) * 5.0, (b[5] - b[4] * 2.0 + b[3]) * 20.0]
+        } else {
+            [b[0], (b[1] - b[0]) * 5.0, (b[2] - b[1] * 2.0 + b[0]) * 20.0]
         }
-        if e.points.len() != space.count() || !e.points.iter().all(|p| p.is_finite()) {
-            return invalid("a hole edge's control points do not match its knots");
-        }
-        let w: Vec<f64> = if e.weights.is_empty() { vec![1.0; e.points.len()] } else { e.weights.clone() };
-        if w.len() != e.points.len() || !w.iter().all(|x| x.is_finite() && *x > 0.0) {
-            return invalid("a hole edge's weights must be positive, one per control point");
-        }
-        let ends = [w.first().copied().unwrap_or(0.0), w.last().copied().unwrap_or(0.0)];
-        if ends.iter().any(|x| (x - 1.0).abs() > 1e-9) {
-            return invalid("a rational hole edge must be in standard form (end weights one)");
-        }
-        let h = e.points.iter().zip(&w).map(|(p, x)| *p * *x).collect();
-        let plane = match e.plane {
-            None => None,
-            Some((n, c)) => {
-                let n1 = n.normalized().filter(|_| c.is_finite()).ok_or_else(|| SplineError::Invalid("a hole edge's plane has no normal".into()))?;
-                Some((n1, c / n.len()))
-            }
-        };
-        Ok(Curve { space, h, w, plane })
-    }
-
-    /// Run backwards (`t ↦ 1 − t`).
-    fn reversed(&self) -> SplineResult<Curve> {
-        let knots: Vec<f64> = self.space.knots().iter().rev().map(|k| 1.0 - k).collect();
-        let mut h = self.h.clone();
-        h.reverse();
-        let mut w = self.w.clone();
-        w.reverse();
-        Ok(Curve { space: Space::new(self.space.degree(), knots)?, h, w, plane: self.plane })
-    }
-
-    /// The point and the first two derivatives at `t`.
-    fn derivs(&self, t: f64) -> SplineResult<[Vec3; 3]> {
-        let mut f = [Vec3::ZERO; 3];
-        let mut w = [0.0; 3];
-        for d in 0..3 {
-            if let (Some(fs), Some(ws)) = (f.get_mut(d), w.get_mut(d)) {
-                *fs = self.space.eval(&self.h, t, d)?;
-                *ws = self.space.eval(&self.w, t, d)?;
-            }
-        }
-        let [f0, f1, f2] = f;
-        let [w0, w1, w2] = w;
-        if !(w0 > 0.0) {
-            return invalid("a hole edge's weight vanishes");
-        }
-        let p = f0 * (1.0 / w0);
-        let d1 = (f1 - p * w1) * (1.0 / w0);
-        let d2 = (f2 - d1 * (2.0 * w1) - p * w2) * (1.0 / w0);
-        Ok([p, d1, d2])
-    }
-
-    fn point(&self, t: f64) -> SplineResult<Vec3> {
-        Ok(self.derivs(t)?[0])
-    }
-
-    /// Arc length, by Gauss quadrature on each span.
-    fn length(&self) -> SplineResult<f64> {
-        let mut s = 0.0;
-        for w in breaks(&self.space).windows(2) {
-            let (a, b) = (w[0], w[1]);
-            for (x, g) in GAUSS4 {
-                let t = 0.5 * (a + b) + 0.5 * (b - a) * x;
-                s += 0.5 * (b - a) * g * self.derivs(t)?[1].len();
-            }
-        }
-        Ok(s)
-    }
-
-    /// The arc length from `t = 0` to `t`.
-    fn length_to(&self, t: f64) -> SplineResult<f64> {
-        let mut s = 0.0;
-        for w in breaks(&self.space).windows(2) {
-            let (a, b) = (w[0], w[1].min(t));
-            if b <= a {
-                break;
-            }
-            for (x, g) in GAUSS4 {
-                let u = 0.5 * (a + b) + 0.5 * (b - a) * x;
-                s += 0.5 * (b - a) * g * self.derivs(u)?[1].len();
-            }
-        }
-        Ok(s)
     }
 }
 
-/// A space's distinct knots, its ends included.
-fn breaks(s: &Space) -> Vec<f64> {
-    let mut out = s.knots().to_vec();
-    out.dedup();
-    out
+/// The hole as the construction reads it: per side `k`, its first half `a[k]` (edge `2k`,
+/// `V_k → M_k`, patch `k`'s bottom) and its second `b[k]` (edge `2k + 1` run back,
+/// `V_{k+1} → M_k`, patch `k + 1`'s left side).
+struct Hole {
+    a: [Half; N],
+    b: [Half; N],
+    spec: QuadSpec,
 }
 
-/// Each distinct knot of a space with how often it repeats inside (0 at the ends).
-fn multiplicities(s: &Space) -> Vec<(f64, usize)> {
-    let [a, b] = s.domain();
-    let mut out: Vec<(f64, usize)> = Vec::new();
-    for &k in s.knots() {
-        if k == a || k == b {
-            continue;
-        }
-        match out.last_mut() {
-            Some((x, c)) if *x == k => *c += 1,
-            _ => out.push((k, 1)),
-        }
+/// An edge as one quintic Bézier, raised from a lower degree when it has one.
+fn quintic(e: &QuadEdge) -> SplineResult<[Vec3; 6]> {
+    let p = e.degree;
+    if !(1..=QUAD_DEGREE).contains(&p) {
+        return Err(SplineError::Unsupported(format!("a hole edge of degree {p} (the explicit corner takes one span of degree 5 at most)")));
     }
-    out
-}
-
-/// The space of degree `q` holding a spline of `curve` (its continuity at each knot kept) and
-/// every spline of `sp`.
-fn union_space(q: usize, curve: &Space, sp: &Space) -> SplineResult<Space> {
-    let raise = q - curve.degree().min(q);
-    let mut all: Vec<(f64, usize)> = multiplicities(curve).into_iter().map(|(x, c)| (x, (c + raise).min(q))).collect();
-    for (x, c) in multiplicities(sp) {
-        match all.iter_mut().find(|(y, _)| *y == x) {
-            Some((_, d)) => *d = (*d).max(c),
-            None => all.push((x, c)),
-        }
+    let one_span = e.knots.len() == 2 * (p + 1) && e.knots.iter().take(p + 1).all(|k| *k == 0.0) && e.knots.iter().skip(p + 1).all(|k| *k == 1.0);
+    if !one_span || e.points.len() != p + 1 {
+        return Err(SplineError::Unsupported("a hole edge of more than one span, or not on [0, 1] (the explicit corner takes one quintic span)".into()));
     }
-    all.sort_by(|a, b| a.0.total_cmp(&b.0));
-    let mut knots = vec![0.0; q + 1];
-    for (x, c) in all {
-        knots.extend(std::iter::repeat_n(x, c));
+    if !(e.weights.is_empty() || e.weights.iter().all(|w| *w == 1.0)) {
+        return Err(SplineError::Unsupported(
+            "a rational hole edge (the explicit corner takes polynomial edges: an eased setback's sections and face curves)".into(),
+        ));
     }
-    knots.extend(std::iter::repeat_n(1.0, q + 1));
-    Space::new(q, knots)
-}
-
-/// The Greville abscissae of a space.
-fn greville(s: &Space) -> Vec<f64> {
-    let (p, k) = (s.degree(), s.knots());
-    (0..s.count()).map(|i| (1..=p).map(|r| k.get(i + r).copied().unwrap_or(0.0)).sum::<f64>() / p as f64).collect()
-}
-
-/// The coefficients in `to` of the spline `ctrl` of `from`, which `to` contains: [`embed`] where
-/// it applies (the same degree, or one polynomial piece), else interpolation at `to`'s Greville
-/// abscissae, which reproduces a spline of the space exactly (Schoenberg–Whitney), checked.
-fn carry<T: Linear>(from: &Space, ctrl: &[T], to: &Space, norm: fn(T) -> f64) -> SplineResult<Vec<T>> {
-    match embed(from, ctrl, to) {
-        Ok(x) => return Ok(x),
-        Err(SplineError::Unsupported(_)) => {}
-        Err(e) => return Err(e),
+    if !e.points.iter().all(|q| q.is_finite()) {
+        return invalid("a hole edge's control points are not finite");
     }
-    let g = greville(to);
-    let conds: Vec<Cond> = g.iter().map(|t| Cond { t: *t, der: 0 }).collect();
-    let data: Vec<T> = g.iter().map(|t| from.eval(ctrl, *t, 0)).collect::<SplineResult<_>>()?;
-    let out = Interpolant::new(to.clone(), conds)?.fit(&data)?;
-    // Exact up to rounding: the two agree everywhere.
-    let scale = ctrl.iter().map(|c| norm(*c)).fold(0.0f64, f64::max).max(1.0);
-    for w in breaks(to).windows(2) {
-        for f in [0.25, 0.5, 0.75] {
-            let t = w[0] + (w[1] - w[0]) * f;
-            let miss = norm(from.eval(ctrl, t, 0)?.plus(to.eval(&out, t, 0)?.times(-1.0)));
-            if !(miss <= 1e-10 * scale) {
-                return invalid(format!("raising a hole edge's degree missed it by {miss:e}"));
-            }
-        }
+    // Degree elevation of a Bézier: Q_i = (i/(p+1)) P_{i−1} + (1 − i/(p+1)) P_i.
+    let mut pts = e.points.clone();
+    while pts.len() < QUAD_DEGREE + 1 {
+        let q = pts.len();
+        let raised: Vec<Vec3> = (0..=q)
+            .map(|i| {
+                let f = i as f64 / q as f64;
+                let before = if i == 0 { Vec3::ZERO } else { pts.get(i - 1).copied().unwrap_or(Vec3::ZERO) };
+                let here = pts.get(i).copied().unwrap_or(Vec3::ZERO);
+                before * f + here * (1.0 - f)
+            })
+            .collect();
+        pts = raised;
+    }
+    let mut out = [Vec3::ZERO; 6];
+    for (o, q) in out.iter_mut().zip(&pts) {
+        *o = *q;
     }
     Ok(out)
 }
 
-/// The smoothstep `3x² − 2x³` of `share / FADE_SHARE` (1 from [`FADE_SHARE`] on).
-fn fade(reach: f64) -> f64 {
-    let t = ((reach - FADE_ZERO) / (1.0 - FADE_ZERO)).clamp(0.0, 1.0);
-    t * t * (3.0 - 2.0 * t)
+/// The angle (radians) between two vectors, `π` where either vanishes.
+fn angle(a: Vec3, b: Vec3) -> f64 {
+    let d = a.len() * b.len();
+    if !(d > 0.0) {
+        return std::f64::consts::PI;
+    }
+    (a.cross(b).len() / d).atan2(a.dot(b) / d)
 }
 
-/// How far a station is into its corner's fade: its distance from the corner over the fade's
-/// length.
-fn reach(from_corner: f64, fade_length: f64) -> f64 {
-    if fade_length > 0.0 { from_corner / fade_length } else { f64::INFINITY }
+/// The patch net's control points from a corner block: `P_a = Σ_{i ≤ a} c[a][i] ∂ⁱS` along one
+/// direction at the near end (`c0`) and at the far end (`c1`, counted from it).
+const C0: [[f64; 3]; 3] = [[1.0, 0.0, 0.0], [1.0, 0.2, 0.0], [1.0, 0.4, 0.05]];
+const C1: [[f64; 3]; 3] = [[1.0, 0.0, 0.0], [1.0, -0.2, 0.0], [1.0, -0.4, 0.05]];
+
+/// The quintic's third and fourth derivatives at `t = 1` from its Hermite data at both ends.
+fn third_at_one(f0: Jet, f1: Jet) -> Vec3 {
+    f0[0] * -60.0 + f0[1] * -24.0 + f0[2] * -3.0 + f1[0] * 60.0 + f1[1] * -36.0 + f1[2] * 9.0
+}
+fn fourth_at_one(f0: Jet, f1: Jet) -> Vec3 {
+    f0[0] * -360.0 + f0[1] * -168.0 + f0[2] * -24.0 + f1[0] * 360.0 + f1[1] * -192.0 + f1[2] * 36.0
 }
 
-/// The value and derivatives `[f, f_u, f_v, f_uu, f_uv, f_vv]` of `F / W` from those of `F` and
-/// `W` (the quotient rule, NURBS Book eq. 4.20).
-fn quotient<T: Linear>(f: [T; 6], w: [f64; 6]) -> [T; 6] {
-    let [f0, fu, fv, fuu, fuv, fvv] = f;
-    let [w0, wu, wv, wuu, wuv, wvv] = w;
-    let r = 1.0 / w0;
-    let s0 = f0.times(r);
-    let su = fu.plus(s0.times(-wu)).times(r);
-    let sv = fv.plus(s0.times(-wv)).times(r);
-    let suu = fuu.plus(su.times(-2.0 * wu)).plus(s0.times(-wuu)).times(r);
-    let suv = fuv.plus(su.times(-wv)).plus(sv.times(-wu)).plus(s0.times(-wuv)).times(r);
-    let svv = fvv.plus(sv.times(-2.0 * wv)).plus(s0.times(-wvv)).times(r);
-    [s0, su, sv, suu, suv, svv]
+/// `f''(1)` of the quartic with `f, f', f''` at 0 (`f0`) and `f, f'` at 1: the quintic's whose
+/// fifth derivative vanishes.
+fn quartic_second_at_one(f0: Jet, f1: [Vec3; 2]) -> Vec3 {
+    f0[0] * 12.0 + f0[1] * 6.0 + f0[2] - f1[0] * 12.0 + f1[1] * 6.0
 }
 
-/// The orders `(du, dv)` of the six derivatives a jet holds.
-const ORDERS: [(usize, usize); 6] = [(0, 0), (1, 0), (0, 1), (2, 0), (1, 1), (0, 2)];
-
-/// A patch's value and derivatives at a point (`[S, S_u, S_v, S_uu, S_uv, S_vv]`) as the fixed
-/// part plus a linear combination of the unknown points.
-struct Jet {
-    fixed: [Vec3; 6],
-    terms: Vec<(usize, [f64; 6])>,
+/// The cubic with `p(0) = v0` and `p, p', p''` at 1: its first two derivatives at 0.
+fn cubic_start(v0: f64, at1: SJet) -> [f64; 2] {
+    let [v1, d1, dd1] = at1;
+    let c = v1 - d1 + dd1 / 2.0 - v0;
+    [d1 - dd1 + 3.0 * c, dd1 - 6.0 * c]
 }
 
-impl Jet {
-    /// The derivatives at the unknowns' values `x`.
-    fn at(&self, x: &[Vec3]) -> [Vec3; 6] {
-        let mut out = self.fixed;
-        for (m, c) in &self.terms {
-            let p = x.get(*m).copied().unwrap_or(Vec3::ZERO);
-            for (o, k) in out.iter_mut().zip(c) {
-                *o += p * *k;
+/// Solve the small dense system `a x = b` (row-major `n × n`) by Gaussian elimination with
+/// partial pivoting; `None` when a pivot is below `1e-12` of the matrix's largest entry.
+fn dense_solve(mut a: Vec<f64>, mut b: Vec<f64>, n: usize) -> Option<Vec<f64>> {
+    if a.len() != n * n || b.len() != n {
+        return None;
+    }
+    let scale = a.iter().fold(0.0f64, |m, x| m.max(x.abs()));
+    if !(scale > 0.0 && scale.is_finite()) {
+        return None;
+    }
+    for c in 0..n {
+        let pivot = (c..n).max_by(|i, j| a.get(i * n + c).map(|x| x.abs()).unwrap_or(0.0).total_cmp(&a.get(j * n + c).map(|x| x.abs()).unwrap_or(0.0)))?;
+        if !(a.get(pivot * n + c).copied().unwrap_or(0.0).abs() > 1e-12 * scale) {
+            return None;
+        }
+        if pivot != c {
+            for k in 0..n {
+                a.swap(pivot * n + k, c * n + k);
+            }
+            b.swap(pivot, c);
+        }
+        let d = a.get(c * n + c).copied()?;
+        for r in 0..n {
+            if r == c {
+                continue;
+            }
+            let f = a.get(r * n + c).copied()? / d;
+            if f == 0.0 {
+                continue;
+            }
+            for k in c..n {
+                let v = a.get(c * n + k).copied()?;
+                if let Some(x) = a.get_mut(r * n + k) {
+                    *x -= f * v;
+                }
+            }
+            let bc = b.get(c).copied()?;
+            if let Some(x) = b.get_mut(r) {
+                *x -= f * bc;
             }
         }
-        out
     }
+    let x: Vec<f64> = (0..n).map(|i| b.get(i).copied().unwrap_or(f64::NAN) / a.get(i * n + i).copied().unwrap_or(f64::NAN)).collect();
+    x.iter().all(|v| v.is_finite()).then_some(x)
 }
 
-/// The basis functions' values and first two derivatives at `t`: the first index and, per
-/// function, `[N, N', N'']`.
-fn basis3(s: &Space, t: f64) -> SplineResult<(usize, Vec<[f64; 3]>)> {
-    let (first, b0) = s.basis(t, 0)?;
-    let (_, b1) = s.basis(t, 1)?;
-    let (_, b2) = s.basis(t, 2)?;
-    Ok((first, b0.iter().zip(&b1).zip(&b2).map(|((a, b), c)| [*a, *b, *c]).collect()))
-}
+impl Hole {
+    fn new(edges: &[QuadEdge], spec: &QuadSpec) -> SplineResult<Hole> {
+        let mut nets = [[Vec3::ZERO; 6]; 2 * N];
+        for (slot, e) in nets.iter_mut().zip(edges) {
+            *slot = quintic(e)?;
+        }
+        let beside = |j: usize| edges.get(j).map(|e| e.beside).ok_or_else(|| SplineError::Invalid("edge".into()));
+        let mut a = [Half { bez: [Vec3::ZERO; 6], beside: Beside::Rail { rail: Vec3::X } }; N];
+        let mut b = a;
+        for k in 0..N {
+            let (first, second) = (nets[2 * k], nets[2 * k + 1]);
+            let mut back = second;
+            back.reverse();
+            a[k] = Half { bez: first, beside: beside(2 * k)? };
+            b[k] = Half { bez: back, beside: beside(2 * k + 1)? };
+        }
+        // Each edge starts where the one before ends.
+        for j in 0..2 * N {
+            let (prev, here) = (nets[(j + 2 * N - 1) % (2 * N)], nets[j]);
+            let gap = prev[5].dist(here[0]);
+            if !(gap <= spec.tol) {
+                return invalid(format!("hole edge {j} does not start where edge {} ends ({gap:e} apart)", (j + 2 * N - 1) % (2 * N)));
+            }
+        }
+        let hole = Hole { a, b, spec: *spec };
+        hole.check()?;
+        Ok(hole)
+    }
 
-/// One patch's fixed part and how its unknowns enter.
-struct Patch {
-    uspace: Space,
-    vspace: Space,
-    /// The fixed net `w·P⁰` and its weights, u fastest.
-    h0: Vec<Vec3>,
-    w: Vec<f64>,
-    /// Per coefficient of `Sp ⊗ Sp` (u fastest): its unknown, `None` where it is zero.
-    dof: Vec<Option<usize>>,
-    /// How an unknown of `Sp ⊗ Sp` enters `F = Σ N_i N_j w_ij P_ij`: per basis function `a` of
-    /// `Sp`, the coefficients in the patch's spaces of `Σ_i N_i (ω_i − 1) E_ai` and
-    /// `Σ_i N_i e_i E_ai` along u (`E` the embedding of `Sp`, `ω` the boundary row's weights, `e`
-    /// the first basis function of `Sp` there), and the same along v.
-    fu: Vec<Vec<f64>>,
-    gu: Vec<Vec<f64>>,
-    fv: Vec<Vec<f64>>,
-    gv: Vec<Vec<f64>>,
-}
-
-/// The fill's patches and unknowns for one spoke space.
-struct Quilt {
-    n: usize,
-    sp: Space,
-    patches: Vec<Patch>,
-    unknowns: usize,
-    /// The edges (loop order), and the fill's first centre.
-    curves: Vec<Curve>,
-    centre0: Vec3,
-    /// Each spoke's start `M_k`.
-    middles: Vec<Vec3>,
-    /// The corners' fade length ([`QuadSpec::fade`]).
-    fade: f64,
-    /// Each unknown's hard constraints, as the solve takes them ([`Map`]).
-    maps: Vec<Map>,
-    /// The fill's curvature tolerance ([`QuadSpec::curvature_tol`]), which decides whether the
-    /// two faces at a hole's corner agree there ([`Quilt::agrees`]).
-    curvature_tol: f64,
-}
-
-/// A station: where, and what is asked there.
-enum Station {
-    /// Edge `edge` at its parameter `t`, which is patch `patch`'s side `v = 0` (`along_u`) or
-    /// `u = 0`, at the patch parameter `s`; the face's frame there (normal turned to the patches'
-    /// side), the edge's unit tangent the loop's way, the integration weight and the G2 fade.
-    /// `corner`: the other edge's tangent at the hole's corner this edge's side starts at, and how
-    /// much more its face curves along it there than this edge's face does.
-    Edge { patch: usize, along_u: bool, s: f64, frame: Frame, tangent: Vec3, weight: f64, g2: f64, corner: (Vec3, f64) },
-    /// Spoke `spoke` at `t`, with its integration weight.
-    Spoke { spoke: usize, t: f64, weight: f64 },
-}
-
-impl Quilt {
-    fn new(curves: &[Curve], q: usize, spans: usize, centre0: Vec3, fade: f64, curvature_tol: f64) -> SplineResult<Quilt> {
-        let m = curves.len();
-        let n = m / 2;
-        // Breaks closer together towards both ends (Chebyshev–Lobatto points), where the
-        // patches' corners are: the hole's corners, the sides' middles and the centre.
-        let sp = Space::with_breaks(
-            q,
-            &(0..=spans)
-                .map(|i| {
-                    let x = i as f64 / spans as f64;
-                    0.5 * (1.0 - (std::f64::consts::PI * x).cos())
-                })
-                .map(|x| x.clamp(0.0, 1.0))
-                .collect::<Vec<_>>(),
-        )?;
-        let c = sp.count();
-        let middles: Vec<Vec3> =
-            (0..n).map(|k| curves.get(2 * k).ok_or_else(|| SplineError::Invalid("edge".into()))?.point(1.0)).collect::<SplineResult<_>>()?;
-        // Unknowns: the centre, each spoke's inner coefficients, each patch's interior.
-        let inner = c - 2;
-        let spoke_id = |k: usize, j: usize| 1 + k * inner + (j - 1);
-        let patch_id = |k: usize, i: usize, j: usize| 1 + n * inner + k * inner * inner + (j - 1) * inner + (i - 1);
-        let unknowns = 1 + n * inner + n * inner * inner;
-        let mut patches = Vec::with_capacity(n);
-        let mut held: Vec<(usize, Vec3, f64)> = Vec::new();
-        for k in 0..n {
-            let row = curves.get(2 * k).ok_or_else(|| SplineError::Invalid("edge".into()))?.clone();
-            let col = curves.get((2 * k + m - 1) % m).ok_or_else(|| SplineError::Invalid("edge".into()))?.reversed()?;
-            let uspace = union_space(q, &row.space, &sp)?;
-            let vspace = union_space(q, &col.space, &sp)?;
-            let norm3 = |p: Vec3| p.len();
-            let norm1 = |x: f64| x.abs();
-            let rh = carry(&row.space, &row.h, &uspace, norm3)?;
-            let rw = carry(&row.space, &row.w, &uspace, norm1)?;
-            let ch = carry(&col.space, &col.h, &vspace, norm3)?;
-            let cw = carry(&col.space, &col.w, &vspace, norm1)?;
-            let (cu, cv) = (uspace.count(), vspace.count());
-            let rp: Vec<Vec3> = rh.iter().zip(&rw).map(|(h, w)| *h * (1.0 / *w)).collect();
-            let cp: Vec<Vec3> = ch.iter().zip(&cw).map(|(h, w)| *h * (1.0 / *w)).collect();
-            let (gu, gv) = (greville(&uspace), greville(&vspace));
-            let c = sp.count();
-            let unit = |a: usize| (0..c).map(|i| if i == a { 1.0 } else { 0.0 }).collect::<Vec<f64>>();
-            let eu_all: Vec<Vec<f64>> = (0..c).map(|a| embed(&sp, &unit(a), &uspace)).collect::<SplineResult<_>>()?;
-            let ev_all: Vec<Vec<f64>> = (0..c).map(|a| embed(&sp, &unit(a), &vspace)).collect::<SplineResult<_>>()?;
-            let (eu, ev) = (eu_all.first().cloned().unwrap_or_default(), ev_all.first().cloned().unwrap_or_default());
-            let fu: Vec<Vec<f64>> =
-                eu_all.iter().map(|e| e.iter().enumerate().map(|(i, x)| (rw.get(i).copied().unwrap_or(1.0) - 1.0) * x).collect()).collect();
-            let gu_: Vec<Vec<f64>> =
-                eu_all.iter().map(|e| e.iter().enumerate().map(|(i, x)| eu.get(i).copied().unwrap_or(0.0) * x).collect()).collect();
-            let fv: Vec<Vec<f64>> =
-                ev_all.iter().map(|e| e.iter().enumerate().map(|(j, x)| ev.get(j).copied().unwrap_or(0.0) * x).collect()).collect();
-            let gv_: Vec<Vec<f64>> =
-                ev_all.iter().map(|e| e.iter().enumerate().map(|(j, x)| (cw.get(j).copied().unwrap_or(1.0) - 1.0) * x).collect()).collect();
-            let mk = middles.get(k).copied().unwrap_or(Vec3::ZERO);
-            let mprev = middles.get((k + n - 1) % n).copied().unwrap_or(Vec3::ZERO);
-            let get = |a: &[Vec3], i: usize| a.get(i).copied().unwrap_or(Vec3::ZERO);
-            let at = |a: &[f64], i: usize| a.get(i).copied().unwrap_or(0.0);
-            // The four sides of the fixed net: the edges, and straight spokes to the first centre.
-            let bottom = |i: usize| get(&rp, i);
-            let left = |j: usize| get(&cp, j);
-            let right = |j: usize| mk + (centre0 - mk) * at(&gv, j);
-            let top = |i: usize| mprev + (centre0 - mprev) * at(&gu, i);
-            let (p00, p10, p01, p11) = (bottom(0), bottom(cu - 1), left(cv - 1), centre0);
-            let mut h0 = Vec::with_capacity(cu * cv);
-            let mut w = Vec::with_capacity(cu * cv);
-            for j in 0..cv {
-                for i in 0..cu {
-                    let (x, y) = (at(&gu, i), at(&gv, j));
-                    let p = match (i, j) {
-                        (_, 0) => bottom(i),
-                        (0, _) => left(j),
-                        (i, _) if i + 1 == cu => right(j),
-                        (_, j) if j + 1 == cv => top(i),
-                        _ => {
-                            let ruled_v = bottom(i) * (1.0 - y) + top(i) * y;
-                            let ruled_u = left(j) * (1.0 - x) + right(j) * x;
-                            let bilinear = (p00 * (1.0 - x) + p10 * x) * (1.0 - y) + (p01 * (1.0 - x) + p11 * x) * y;
-                            ruled_v + ruled_u - bilinear
+    /// The hole's data against the construction's conditions (module docs), within the spec.
+    fn check(&self) -> SplineResult<()> {
+        let s = &self.spec;
+        let unsupported = |m: String| Err(SplineError::Unsupported(m));
+        for k in 0..N {
+            let (a, b) = (self.a[k], self.b[k]);
+            // One side, one thing beside it.
+            match (a.beside, b.beside) {
+                (Beside::Plane { normal: n1, offset: c1 }, Beside::Plane { normal: n2, offset: c2 }) => {
+                    if !(angle(n1, n2) <= s.angle_tol && (c1 - c2).abs() <= s.tol && (n1.len() - 1.0).abs() <= 1e-9) {
+                        return unsupported(format!("side {k}'s two halves lie on different planes"));
+                    }
+                    for (h, which) in [(a, "first"), (b, "second")] {
+                        let off = h.bez.iter().map(|q| (n1.dot(*q) - c1).abs()).fold(0.0f64, f64::max);
+                        if !(off <= s.tol) {
+                            return unsupported(format!("side {k}'s {which} half leaves its plane by {off:e}"));
                         }
-                    };
-                    // The edges' weights, eased to one over the first span of `Sp` (the first
-                    // basis function of `Sp` in each direction): one on the spokes and inside.
-                    let weight = 1.0 + (at(&rw, i) - 1.0) * at(&ev, j) + (at(&cw, j) - 1.0) * at(&eu, i);
-                    if !(weight > 0.0) {
-                        return invalid("a patch's weights do not stay positive");
-                    }
-                    h0.push(p * weight);
-                    w.push(weight);
-                }
-            }
-            let prev = (k + n - 1) % n;
-            let mut dof = vec![None; c * c];
-            for j in 1..c {
-                for i in 1..c {
-                    let id = match (i + 1 == c, j + 1 == c) {
-                        (true, true) => 0,
-                        (true, false) => spoke_id(k, j),
-                        (false, true) => spoke_id(prev, i),
-                        (false, false) => patch_id(k, i, j),
-                    };
-                    if let Some(slot) = dof.get_mut(i + c * j) {
-                        *slot = Some(id);
                     }
                 }
+                (Beside::Rail { rail: r1 }, Beside::Rail { rail: r2 }) => {
+                    if !(angle(r1, r2) <= s.angle_tol && (r1.len() - 1.0).abs() <= 1e-9) {
+                        return unsupported(format!("side {k}'s two halves have rounds of different rails"));
+                    }
+                }
+                _ => return unsupported(format!("side {k}'s two halves have different faces beside them")),
             }
-            // A planar face beside the patch's bottom edge (v = 0) or its left edge (u = 0): the
-            // second row (column) of control points in its plane.
-            let coef = Coefficients { eu: &eu_all, ev: &ev_all, fu: &fu, gu: &gu_, fv: &fv, gv: &gv_ };
-            if row.plane.is_some() && col.plane.is_some() {
-                return Err(SplineError::Unsupported("a hole corner between two planar faces".into()));
+            let next = self.a[(k + 1) % N].beside;
+            if matches!((a.beside, next), (Beside::Plane { .. }, Beside::Plane { .. }) | (Beside::Rail { .. }, Beside::Rail { .. })) {
+                return unsupported(
+                    "a hole whose sides do not alternate between a round's section and a planar face's curve (the explicit corner of three rounds)"
+                        .into(),
+                );
             }
-            if let Some(plane) = row.plane {
-                held.extend(hold_in_plane(&coef, &dof, c, cu, cv, true, plane, &mut h0, &w)?);
+            // The two halves meet smoothly at the middle, at the same speed (the side split at
+            // its parameter's middle).
+            let (ja, jb) = (a.jet(true), b.jet(true));
+            if !(ja[0].dist(jb[0]) <= s.tol) {
+                return invalid(format!("side {k}'s halves do not meet at its middle"));
             }
-            if let Some(plane) = col.plane {
-                held.extend(hold_in_plane(&coef, &dof, c, cu, cv, false, plane, &mut h0, &w)?);
+            let speed = ja[1].len();
+            if !((ja[1] + jb[1]).len() <= s.angle_tol * speed) {
+                return unsupported(format!(
+                    "side {k}'s halves meet at its middle at different speeds or directions ({:e} apart): the explicit corner takes a side split at its middle",
+                    (ja[1] + jb[1]).len()
+                ));
             }
-            patches.push(Patch { uspace, vspace, h0, w, dof, fu, gu: gu_, fv, gv: gv_ });
+            if !((ja[2] - jb[2]).len() <= s.curvature_tol * speed * speed) {
+                return unsupported(format!("side {k}'s halves meet at its middle with different curvatures"));
+            }
         }
-        let size = curves.iter().flat_map(|c| c.h.iter().zip(&c.w).map(|(h, w)| *h * (1.0 / *w))).fold(0.0f64, |m, p| m.max(p.len())).max(1.0);
-        let maps = maps_of(unknowns, &held, size)?;
-        Ok(Quilt { n, sp, patches, unknowns, curves: curves.to_vec(), centre0, middles, fade, curvature_tol, maps })
+        // At each hole corner a round's section meets a face's curve: the curve leaves along the
+        // rail with no curvature, and the section leaves tangent to the plane with no curvature
+        // across it.
+        for k in 0..N {
+            let (bottom, left) = (self.a[k], self.b[(k + N - 1) % N]);
+            let (round, face) = match (bottom.beside, left.beside) {
+                (Beside::Rail { rail }, Beside::Plane { normal, .. }) => ((bottom, rail), (left, normal)),
+                (Beside::Plane { normal, .. }, Beside::Rail { rail }) => ((left, rail), (bottom, normal)),
+                _ => return unsupported("a hole corner between two faces of one kind".into()),
+            };
+            let (r, e) = (round.0.jet(false), round.1);
+            let (f, n) = (face.0.jet(false), face.1);
+            let (rs, fs) = (r[1].len(), f[1].len());
+            if !(rs > 0.0 && fs > 0.0) {
+                return invalid(format!("a hole edge stops at the hole's corner {k}"));
+            }
+            if !(angle(f[1], e) <= s.angle_tol) {
+                return unsupported(format!(
+                    "at the hole's corner {k} the face's curve leaves {:.4}° off its round's rail (the explicit corner takes a face curve tangent to the contact line)",
+                    angle(f[1], e).to_degrees()
+                ));
+            }
+            let bend = (f[2] - e * f[2].dot(e)).len() / (fs * fs);
+            if !(bend <= s.curvature_tol) {
+                return unsupported(format!(
+                    "at the hole's corner {k} the face's curve turns ({bend:e} per length): the explicit corner takes one that leaves the contact line curvature-continuously (an eased setback)"
+                ));
+            }
+            if !(r[1].dot(n).abs() <= s.angle_tol * rs) {
+                return unsupported(format!("at the hole's corner {k} the round's section leaves its plane"));
+            }
+            let across = r[2].dot(n).abs() / (rs * rs);
+            if !(across <= s.curvature_tol) {
+                return unsupported(format!(
+                    "at the hole's corner {k} the round's section curves across its plane ({across:e} per length): the explicit corner takes an eased section, flat across"
+                ));
+            }
+        }
+        Ok(())
     }
 
-    /// Patch `k`'s jet at `(u, v)`.
-    fn jet(&self, k: usize, u: f64, v: f64) -> SplineResult<Jet> {
-        let p = self.patches.get(k).ok_or_else(|| SplineError::Invalid("patch".into()))?;
-        let (iu, bu) = basis3(&p.uspace, u)?;
-        let (iv, bv) = basis3(&p.vspace, v)?;
-        let cu = p.uspace.count();
-        let mut f = [Vec3::ZERO; 6];
-        let mut w = [0.0; 6];
-        for (b, nv) in bv.iter().enumerate() {
-            for (a, nu) in bu.iter().enumerate() {
-                let idx = (iv + b) * cu + iu + a;
-                let (Some(h), Some(x)) = (p.h0.get(idx), p.w.get(idx)) else { return invalid("net") };
-                for (d, (du, dv)) in ORDERS.iter().enumerate() {
-                    let c = nu.get(*du).copied().unwrap_or(0.0) * nv.get(*dv).copied().unwrap_or(0.0);
-                    if let (Some(fs), Some(ws)) = (f.get_mut(d), w.get_mut(d)) {
-                        *fs += *h * c;
-                        *ws += x * c;
+    /// The direction a side's cross derivative takes at its middle, into the hole: a round's rail;
+    /// on a plane, square to the curve in the plane, to the side the hole's corner shows.
+    fn leave(&self, k: usize) -> SplineResult<Vec3> {
+        let a = self.a[k];
+        match a.beside {
+            Beside::Rail { rail } => Ok(rail),
+            Beside::Plane { normal, .. } => {
+                let t = a.jet(true)[1];
+                let l = normal.cross(t).normalized().ok_or_else(|| SplineError::Invalid(format!("side {k} stops at its middle")))?;
+                // At V_k the hole lies where the left edge leaves, across the bottom one.
+                let (t0, into) = (a.jet(false)[1], self.b[(k + N - 1) % N].jet(false)[1]);
+                Ok(if t0.cross(into).dot(t.cross(l)) >= 0.0 { l } else { -l })
+            }
+        }
+    }
+
+    fn fill(&self) -> SplineResult<QuadFill> {
+        let ms: [Vec3; N] = std::array::from_fn(|k| self.a[k].jet(true)[0]);
+        let mut ell = [Vec3::ZERO; N];
+        for (k, l) in ell.iter_mut().enumerate() {
+            *l = self.leave(k)?;
+        }
+        // The centre: the middle of each curve between opposite middles (the cubic leaving each
+        // along its side's direction, its handles a third of the chord), averaged.
+        let mut centre = Vec3::ZERO;
+        for k in 0..N / 2 {
+            let (p, q) = (ms[k], ms[k + N / 2]);
+            centre += (p + q) * 0.5 + (ell[k] + ell[k + N / 2]) * (p.dist(q) / 8.0);
+        }
+        let centre = centre * (2.0 / N as f64);
+        // The spoke tangents at the centre (towards it): the regular star, an affine image of the
+        // regular hexagon, closest to the chords from the middles (its first Fourier mode).
+        let ang = |k: usize| std::f64::consts::TAU * k as f64 / N as f64;
+        let (mut x, mut y) = (Vec3::ZERO, Vec3::ZERO);
+        for (k, m) in ms.iter().enumerate() {
+            let u = centre - *m;
+            x += u * (ang(k).cos() * 2.0 / N as f64);
+            y += u * (ang(k).sin() * 2.0 / N as f64);
+        }
+        let star: [Vec3; N] = std::array::from_fn(|k| x * ang(k).cos() + y * ang(k).sin());
+        let normal = star[N - 1].cross(star[0]).normalized().ok_or_else(|| SplineError::Invalid("the spokes' star at the centre is flat".into()))?;
+        // The quadratic form at the centre: along each spoke, its height over the tangent plane is
+        // the cubic through its ends (h, h' at M; 0, 0 at C), whose h''(1) = 6 h(0) + 2 h'(0) is
+        // the form on that spoke's tangent; opposite spokes averaged, three directions solved.
+        let e1 = star[0].normalized().ok_or_else(|| SplineError::Invalid("a spoke has no tangent at the centre".into()))?;
+        let e2 = normal.cross(e1);
+        let mut rows = Vec::with_capacity(9);
+        let mut rhs = Vec::with_capacity(3);
+        for (k, t) in star.iter().take(N / 2).enumerate() {
+            let mut h = 0.0;
+            for kk in [k, k + N / 2] {
+                let chord = centre.dist(ms[kk]);
+                h += 6.0 * normal.dot(ms[kk] - centre) + 2.0 * normal.dot(ell[kk]) * chord;
+            }
+            let (u, v) = (t.dot(e1), t.dot(e2));
+            rows.extend([u * u, 2.0 * u * v, v * v]);
+            rhs.push(h / 2.0);
+        }
+        let form = dense_solve(rows, rhs, 3).ok_or_else(|| SplineError::Invalid("the spokes' directions at the centre do not fix a quadratic form".into()))?;
+        let ii = |p: Vec3, q: Vec3| {
+            let (pu, pv, qu, qv) = (p.dot(e1), p.dot(e2), q.dot(e1), q.dot(e2));
+            form.first().copied().unwrap_or(0.0) * pu * qu
+                + form.get(1).copied().unwrap_or(0.0) * (pu * qv + pv * qu)
+                + form.get(2).copied().unwrap_or(0.0) * pv * qv
+        };
+        // Each spoke's second derivative at the centre: the form's normal part and the regular
+        // star's tangential half of the tangent (what closes orders 0–2 round the centre).
+        let spoke_second_c: [Vec3; N] = std::array::from_fn(|k| star[k] * 0.5 + normal * ii(star[k], star[k]));
+        // Each spoke at its middle: its tangent along the side's direction, as long as its chord;
+        // its second derivative the quartic's through the rest of its end data, in what the side
+        // allows (along the rail; in the plane).
+        let mut spoke_m = [[Vec3::ZERO; 3]; N];
+        for (k, s) in spoke_m.iter_mut().enumerate() {
+            let chord = centre.dist(ms[k]);
+            let d1 = ell[k] * chord;
+            let raw = (centre - ms[k]) * 12.0 - d1 * 6.0 - star[k] * 6.0 + spoke_second_c[k];
+            let d2 = match self.a[k].beside {
+                Beside::Rail { rail } => rail * raw.dot(rail),
+                Beside::Plane { normal: n, .. } => raw - n * raw.dot(n),
+            };
+            *s = [ms[k], d1, d2];
+        }
+        // The rounds' cross derivative speeds a(t) and second derivatives c(t) along each half,
+        // and the planar halves' cross derivatives at the middle.
+        let mut m_blocks = [ZERO_BLOCK; N];
+        let mut round_v: [Option<(SJet, SJet)>; 2 * N] = [None; 2 * N];
+        for k in 0..N {
+            let a = self.a[k];
+            let ja = a.jet(true);
+            let [_, d1, d2] = spoke_m[k];
+            let mut m = ZERO_BLOCK;
+            for (row, jet) in m.iter_mut().zip(ja) {
+                row[0] = jet;
+            }
+            match a.beside {
+                Beside::Rail { rail } => {
+                    // The face curves' tangent and second derivative along the rail at the two corners.
+                    let (fa, fb) = (self.b[(k + N - 1) % N].jet(false), self.a[(k + 1) % N].jet(false));
+                    let (av, bv) = (fa[1].dot(rail), fb[1].dot(rail));
+                    let (cav, cbv) = (fa[2].dot(rail), fb[2].dot(rail));
+                    if !(av > 0.0 && bv > 0.0) {
+                        return invalid(format!("side {k}'s face curves do not leave along its rail"));
                     }
+                    let am = d1.dot(rail);
+                    // The halves' slopes towards M add up to the spoke's speed there (β); the
+                    // curvature terms tie as the relation's second order asks.
+                    let (sa, sb) = ((am + bv - av) / 2.0, (am + av - bv) / 2.0);
+                    let (qa, qb) = ((sa - sb) / 2.0, (sb - sa) / 2.0);
+                    let cm = d2.dot(rail);
+                    let (ca, cb) = (cm + (cbv - cav) / 2.0, cm + (cav - cbv) / 2.0);
+                    let (cqa, cqb) = (ca - cb, cb - ca);
+                    let a_m: SJet = [am, sa, qa];
+                    let c_m: SJet = [cm, ca, cqa];
+                    let start = |v0: f64, at1: SJet| {
+                        let [p1, p2] = cubic_start(v0, at1);
+                        [v0, p1, p2]
+                    };
+                    round_v[2 * k] = Some((start(av, a_m), start(cav, c_m)));
+                    round_v[2 * k + 1] = Some((start(bv, [am, sb, qb]), start(cbv, [cm, cb, cqb])));
+                    for i in 0..3 {
+                        m[i][1] = rail * a_m[i];
+                        m[i][2] = rail * c_m[i];
+                    }
+                }
+                Beside::Plane { .. } => {
+                    m[0][1] = d1;
+                    m[1][1] = d1 * (BETA / 2.0);
+                    m[0][2] = d2;
+                    m[1][2] = d2 * BETA;
+                }
+            }
+            m_blocks[k] = m;
+        }
+        // The sides' middles' share of the centre's closure (order 4): the sum over the patches of
+        // 120 E'(1) + 48 D'(1) + 6 Q'(1) − 24 D(1) − 6 Q(1) must vanish; the planar halves' Q'(1)
+        // take what it misses, each in its plane.
+        let miss = m_blocks.iter().fold(Vec3::ZERO, |s, m| s + m[1][0] * 120.0 + m[1][1] * 48.0 + m[1][2] * 6.0 - m[0][1] * 24.0 - m[0][2] * 6.0);
+        if miss.len() > 0.0 {
+            let mut g = [[0.0f64; 3]; 3];
+            let mut planes = Vec::new();
+            for (k, h) in self.a.iter().enumerate() {
+                if let Beside::Plane { normal: n, .. } = h.beside {
+                    let nv = [n.x, n.y, n.z];
+                    for (r, row) in g.iter_mut().enumerate() {
+                        for (c, x) in row.iter_mut().enumerate() {
+                            *x += if r == c { 1.0 } else { 0.0 } - nv[r] * nv[c];
+                        }
+                    }
+                    planes.push((k, n));
+                }
+            }
+            let flat: Vec<f64> = g.iter().flatten().copied().collect();
+            let target = miss * (-1.0 / 6.0);
+            let y = dense_solve(flat, vec![target.x, target.y, target.z], 3)
+                .ok_or_else(|| SplineError::Invalid("the hole's planes do not span space".into()))?;
+            let yv = Vec3::new(y.first().copied().unwrap_or(0.0), y.get(1).copied().unwrap_or(0.0), y.get(2).copied().unwrap_or(0.0));
+            for (k, n) in planes {
+                if let Some(m) = m_blocks.get_mut(k) {
+                    m[1][2] += yv - n * yv.dot(n);
                 }
             }
         }
-        if !(w.first().copied().unwrap_or(0.0) > 0.0) {
-            return invalid("a patch's weight vanishes");
+        // The blocks at the hole's corners, and at the middles on the far side of each spoke.
+        let mut blocks = [Blocks { v: ZERO_BLOCK, m: ZERO_BLOCK, p: ZERO_BLOCK, c: ZERO_BLOCK }; N];
+        for k in 0..N {
+            let prev = (k + N - 1) % N;
+            let (bottom, left) = (self.a[k], self.b[prev]);
+            let (jb, jl) = (bottom.jet(false), left.jet(false));
+            let mut v = ZERO_BLOCK;
+            for i in 0..3 {
+                v[i][0] = jb[i];
+                v[0][i] = jl[i];
+            }
+            // The round's cross fields' derivatives at V (along its edge), the plane's following.
+            if let (Beside::Rail { rail }, Some((a, c))) = (bottom.beside, round_v.get(2 * k).copied().flatten()) {
+                v[1][1] = rail * a[1];
+                v[2][1] = rail * a[2];
+                v[1][2] = rail * c[1];
+                v[2][2] = rail * c[2];
+            } else if let (Beside::Rail { rail }, Some((a, c))) = (left.beside, round_v.get(2 * prev + 1).copied().flatten()) {
+                v[1][1] = rail * a[1];
+                v[1][2] = rail * a[2];
+                v[2][1] = rail * c[1];
+                v[2][2] = rail * c[2];
+            } else {
+                return invalid(format!("the hole's corner {k} has no round beside it"));
+            }
+            blocks[k].v = v;
+            blocks[k].m = m_blocks[k];
+            // Patch k + 1's block at M_k: the spoke's relation from patch k's, its edge row the
+            // hole's own.
+            let mut p = relation_at_middle(&m_blocks[k]);
+            let jn = self.b[k].jet(true);
+            for (j, x) in jn.iter().enumerate() {
+                p[0][j] = *x;
+            }
+            blocks[(k + 1) % N].p = p;
         }
-        let fixed = quotient(f, w);
-        let c = self.sp.count();
-        let (su, du) = basis3(&self.sp, u)?;
-        let (sv, dv) = basis3(&self.sp, v)?;
-        // A 1D spline of the patch's space along u (v) at the point, from its coefficients.
-        let along = |coef: &[f64], first: usize, basis: &[[f64; 3]]| -> [f64; 3] {
-            let mut out = [0.0; 3];
-            for (k, nb) in basis.iter().enumerate() {
-                let x = coef.get(first + k).copied().unwrap_or(0.0);
-                for (o, b) in out.iter_mut().zip(nb) {
-                    *o += x * b;
-                }
+        // The centre's blocks: the first patch's orders 0–2 from the centre, the star and the form;
+        // its orders 3–4 from the closure and the spokes' quartic rule; the others by the spokes.
+        let mut c0 = ZERO_BLOCK;
+        let (t5, t0) = (star[N - 1], star[0]);
+        c0[0][0] = centre;
+        c0[1][0] = t5;
+        c0[0][1] = t0;
+        c0[2][0] = spoke_second_c[N - 1];
+        c0[0][2] = spoke_second_c[0];
+        c0[1][1] = (t5 + t0) * 0.5 + normal * ii(t5, t0);
+        let around = |c21: Vec3, c12: Vec3, c22: Vec3| -> [Block; N + 1] {
+            let mut c = c0;
+            c[2][1] = c21;
+            c[1][2] = c12;
+            c[2][2] = c22;
+            let mut out = [ZERO_BLOCK; N + 1];
+            out[0] = c;
+            for k in 0..N {
+                c = relation_to_centre(&m_blocks[k], &c);
+                out[k + 1] = c;
             }
             out
         };
-        let mut terms = Vec::with_capacity(du.len() * dv.len());
-        for (b, nv) in dv.iter().enumerate() {
-            let (fvb, gvb) = (
-                along(p.fv.get(sv + b).map(|x| x.as_slice()).unwrap_or(&[]), iv, &bv),
-                along(p.gv.get(sv + b).map(|x| x.as_slice()).unwrap_or(&[]), iv, &bv),
-            );
-            for (a, nu) in du.iter().enumerate() {
-                let Some(Some(id)) = p.dof.get((sv + b) * c + su + a) else { continue };
-                let (fua, gua) = (
-                    along(p.fu.get(su + a).map(|x| x.as_slice()).unwrap_or(&[]), iu, &bu),
-                    along(p.gu.get(su + a).map(|x| x.as_slice()).unwrap_or(&[]), iu, &bu),
-                );
-                let mut fc = [0.0; 6];
-                for (d, (ou, ov)) in ORDERS.iter().enumerate() {
-                    let g = |x: &[f64; 3], y: &[f64; 3]| x.get(*ou).copied().unwrap_or(0.0) * y.get(*ov).copied().unwrap_or(0.0);
-                    if let Some(slot) = fc.get_mut(d) {
-                        *slot = nu.get(*ou).copied().unwrap_or(0.0) * nv.get(*ov).copied().unwrap_or(0.0) + g(&fua, &fvb) + g(&gua, &gvb);
-                    }
-                }
-                terms.push((*id, quotient(fc, w)));
+        // The nine conditions on (c21, c12, c22), affine: the closure of the order-3 block's
+        // c21 row, the alternating sum of the spokes' col_1''(1) misses from their quartics, and
+        // the sum of their col_2''(1) misses.
+        let conditions = |v: &[f64; 9]| -> [f64; 9] {
+            let vec = |i: usize| Vec3::new(v[i], v[i + 1], v[i + 2]);
+            let all = around(vec(0), vec(3), vec(6));
+            let close = all[N][2][1] - all[0][2][1];
+            let (mut alt, mut sum) = (Vec3::ZERO, Vec3::ZERO);
+            for (k, (m, c)) in m_blocks.iter().zip(all.iter()).enumerate() {
+                let p12 = quartic_second_at_one(m[1], [c[1][0], c[1][1]]);
+                let p22 = quartic_second_at_one(m[2], [c[2][0], c[2][1]]);
+                let sign = if k % 2 == 0 { 1.0 } else { -1.0 };
+                alt += (c[1][2] - p12) * sign;
+                sum += c[2][2] - p22;
             }
-        }
-        Ok(Jet { fixed, terms })
-    }
-
-    /// The stations: Gauss points of every span of each edge's patch space, and of each spoke.
-    fn stations(&self, lengths: &[f64], frame_at: &mut dyn FnMut(usize, &[f64]) -> SplineResult<Vec<Frame>>) -> SplineResult<Vec<Station>> {
-        let n = self.n;
-        let m = 2 * n;
-        let mut out = Vec::new();
-        // The patches' natural normal against the frames' at a first station: which way the
-        // frames' normals are turned.
-        let sides = self.frames_side(frame_at)?;
-        for k in 0..n {
-            let p = self.patches.get(k).ok_or_else(|| SplineError::Invalid("patch".into()))?;
-            for along_u in [true, false] {
-                let (edge, space) = if along_u { (2 * k, &p.uspace) } else { ((2 * k + m - 1) % m, &p.vspace) };
-                let curve = self.curves.get(edge).ok_or_else(|| SplineError::Invalid("edge".into()))?;
-                let mut ss = Vec::new();
-                let mut ws = Vec::new();
-                for w in breaks(space).windows(2) {
-                    let (a, b) = (w[0], w[1]);
-                    for (x, g) in GAUSS4 {
-                        ss.push(0.5 * (a + b) + 0.5 * (b - a) * x);
-                        ws.push(0.5 * (b - a) * g);
-                    }
-                }
-                // The hole's corner V_k: the curvature the other edge's face has along that edge
-                // there, against this edge's face's (`delta`), and that edge's tangent.
-                let other = if along_u { (2 * k + m - 1) % m } else { 2 * k };
-                let (here, there) = if along_u { (0.0, 1.0) } else { (1.0, 0.0) };
-                let corner = self.corner_terms(edge, other, here, there, frame_at, &sides)?;
-                let agrees = self.agrees(edge, other, here, there, corner.1, frame_at, &sides)?;
-                // The edge's own parameter: the patch's along `v = 0`, run back up `u = 0`.
-                let ts: Vec<f64> = ss.iter().map(|s| if along_u { *s } else { 1.0 - s }).collect();
-                let frames = frame_at(edge, &ts)?;
-                for ((s, t), (f, wt)) in ss.iter().zip(&ts).zip(frames.iter().zip(&ws)) {
-                    let [_, d1, _] = curve.derivs(*t)?;
-                    let tangent = d1.normalized().ok_or_else(|| SplineError::Invalid("a hole edge stops".into()))?;
-                    // Distance from the corner `V_k` along the side, as a share of it.
-                    let from_corner = if along_u { curve.length_to(*t)? } else { lengths.get(edge).copied().unwrap_or(0.0) - curve.length_to(*t)? };
-                    let share = reach(from_corner, self.fade);
-                    let side = sides.get(edge).copied().unwrap_or(1.0);
-                    // The face's normal turned square to the edge the patch holds: a record's
-                    // edge lies in its face's tangent plane only to the record's tolerance (an
-                    // approximated section turns out of it by a hundredth of a degree), and no
-                    // surface through the edge has a normal that is not square to it.
-                    let normal = (f.normal - tangent * f.normal.dot(tangent)).normalized().unwrap_or(f.normal) * side;
-                    let leave = (f.leave - tangent * f.leave.dot(tangent) - normal * f.leave.dot(normal)).normalized().unwrap_or(f.leave);
-                    let frame = Frame { normal, leave, form: f.form.map(|x| x * side) };
-                    let g2 = if agrees { 1.0 } else { fade(share) };
-                    out.push(Station::Edge { patch: k, along_u, s: *s, frame, tangent, weight: *wt, g2, corner });
-                }
-            }
-            // Spoke k: its stations on the breaks of both patches' spaces along it.
-            let next = self.patches.get((k + 1) % n).ok_or_else(|| SplineError::Invalid("patch".into()))?;
-            let mut all = breaks(&p.vspace);
-            all.extend(breaks(&next.uspace));
-            all.sort_by(f64::total_cmp);
-            all.dedup();
-            for w in all.windows(2) {
-                let (a, b) = (w[0], w[1]);
-                for (x, g) in GAUSS4 {
-                    out.push(Station::Spoke { spoke: k, t: 0.5 * (a + b) + 0.5 * (b - a) * x, weight: 0.5 * (b - a) * g });
+            [close.x, close.y, close.z, alt.x, alt.y, alt.z, sum.x, sum.y, sum.z]
+        };
+        let base = conditions(&[0.0; 9]);
+        let mut a = vec![0.0; 81];
+        for q in 0..9 {
+            let mut v = [0.0; 9];
+            v[q] = 1.0;
+            let r = conditions(&v);
+            for (row, (x, y)) in r.iter().zip(base.iter()).enumerate() {
+                if let Some(slot) = a.get_mut(row * 9 + q) {
+                    *slot = x - y;
                 }
             }
         }
-        Ok(out)
-    }
-
-    /// Per edge, +1 when the face's normal as the frames give it lies on the side of the
-    /// patches' natural normal, −1 when not. Along an edge the patch's natural normal is the
-    /// edge's tangent (the loop's way) × the direction into the hole, whichever side of the
-    /// square the edge is: so the sign is the frame's `normal · (t × leave)` at the edge's middle
-    /// (the leave direction, away from the face, does not depend on the normal's sign).
-    fn frames_side(&self, frame_at: &mut dyn FnMut(usize, &[f64]) -> SplineResult<Vec<Frame>>) -> SplineResult<Vec<f64>> {
-        (0..2 * self.n)
-            .map(|j| {
-                let curve = self.curves.get(j).ok_or_else(|| SplineError::Invalid("edge".into()))?;
-                let [_, d1, _] = curve.derivs(0.5)?;
-                let f = frame_at(j, &[0.5])?;
-                Ok(if f.first().map(|f| f.normal.dot(d1.cross(f.leave))).unwrap_or(0.0) >= 0.0 { 1.0 } else { -1.0 })
-            })
-            .collect()
-    }
-
-    /// At the hole's corner where edge `edge` (at its parameter `here`) meets edge `other` (at
-    /// `there`): `other`'s unit tangent, and how much more `other`'s face curves along it there
-    /// than `edge`'s face does (the patch, holding both edges, has `other`'s face's).
-    fn corner_terms(
-        &self,
-        edge: usize,
-        other: usize,
-        here: f64,
-        there: f64,
-        frame_at: &mut dyn FnMut(usize, &[f64]) -> SplineResult<Vec<Frame>>,
-        sides: &[f64],
-    ) -> SplineResult<(Vec3, f64)> {
-        let curve = self.curves.get(edge).ok_or_else(|| SplineError::Invalid("edge".into()))?;
-        let oc = self.curves.get(other).ok_or_else(|| SplineError::Invalid("edge".into()))?;
-        let to = oc.derivs(there)?[1].normalized().ok_or_else(|| SplineError::Invalid("a hole edge stops".into()))?;
-        let fo = frame_at(other, &[there])?.first().copied().ok_or_else(|| SplineError::Invalid("frame".into()))?;
-        let fh = frame_at(edge, &[here])?.first().copied().ok_or_else(|| SplineError::Invalid("frame".into()))?;
-        let th = curve.derivs(here)?[1].normalized().ok_or_else(|| SplineError::Invalid("a hole edge stops".into()))?;
-        let (so, sh) = (sides.get(other).copied().unwrap_or(1.0), sides.get(edge).copied().unwrap_or(1.0));
-        let (a, b) = (to.dot(th), to.dot(fh.leave));
-        let mine = sh * (a * a * fh.form[0] + 2.0 * a * b * fh.form[1] + b * b * fh.form[2]);
-        Ok((to, so * fo.form[0] - mine))
-    }
-
-    /// Whether the two faces at the hole's corner where edge `edge` (at its parameter `here`)
-    /// meets edge `other` (at `there`) agree there, so that the patch can be G2 to `edge`'s face
-    /// all the way to the corner: its G2 rows are then held up to it, not faded. The patch holds
-    /// both edges, so at the corner its normal curvature along `other` is `other`'s face's
-    /// (`delta`, the difference from `edge`'s face's along it, must vanish); and with G1 to
-    /// `other`'s face along `other`, which turns in that face by its geodesic curvature `k`, its
-    /// curvature across `edge` leaves `edge`'s face's by `II(t, t) k y` at `y` from the corner
-    /// (`II(t, t)` `edge`'s face's normal curvature along `edge`: a graph `z = f(x, y)` with
-    /// `f(0, y) = II y² / 2`, `f_x = f_xx = 0` there, and `∇f = 0` along `y = k x² / 2` needs
-    /// `f_xxy = −II k`). Both within the curvature tolerance over the fade: a round eased into the
-    /// curvature-continuous section at its setback (no curvature across where it meets a plane),
-    /// and a face curve that leaves the contact line without turning.
-    #[allow(clippy::too_many_arguments)]
-    fn agrees(
-        &self,
-        edge: usize,
-        other: usize,
-        here: f64,
-        there: f64,
-        delta: f64,
-        frame_at: &mut dyn FnMut(usize, &[f64]) -> SplineResult<Vec<Frame>>,
-        sides: &[f64],
-    ) -> SplineResult<bool> {
-        let tol = self.curvature_tol;
-        if !(delta.abs() <= tol) {
-            return Ok(false);
+        let sol = dense_solve(a, base.iter().map(|x| -x).collect(), 9)
+            .ok_or_else(|| SplineError::Invalid("the centre's third derivatives are not fixed by its closure".into()))?;
+        let sv = |i: usize| Vec3::new(sol.get(i).copied().unwrap_or(0.0), sol.get(i + 1).copied().unwrap_or(0.0), sol.get(i + 2).copied().unwrap_or(0.0));
+        let all = around(sv(0), sv(3), sv(6));
+        // The closure, which the rules and the middles' share leave to the input's rounding.
+        let scale = all[0].iter().flatten().fold(0.0f64, |m, x| m.max(x.len())).max(1.0);
+        let off = (0..3).flat_map(|i| (0..3).map(move |j| (i, j))).map(|(i, j)| all[N][i][j].dist(all[0][i][j])).fold(0.0f64, f64::max);
+        if !(off <= 1e-6 * scale) {
+            return Err(SplineError::Unsupported(format!("the patches do not close round the centre ({off:e} off; the hole's sides miss each other's conditions)")));
         }
-        let oc = self.curves.get(other).ok_or_else(|| SplineError::Invalid("edge".into()))?;
-        let fh = frame_at(edge, &[here])?.first().copied().ok_or_else(|| SplineError::Invalid("frame".into()))?;
-        let fo = frame_at(other, &[there])?.first().copied().ok_or_else(|| SplineError::Invalid("frame".into()))?;
-        let [_, o1, o2] = oc.derivs(there)?;
-        let speed2 = o1.len2();
-        let to = o1.normalized().ok_or_else(|| SplineError::Invalid("a hole edge stops".into()))?;
-        if !(speed2 > 0.0) {
-            return invalid("a hole edge stops");
+        for (b, c) in blocks.iter_mut().zip(all.iter()) {
+            b.c = *c;
         }
-        // `other`'s turn in its face: its curvature vector's part in the face's tangent plane,
-        // square to it.
-        let bend = o2 * (1.0 / speed2) - to * (o2.dot(to) / speed2);
-        let k = (bend - fo.normal * bend.dot(fo.normal)).len();
-        let ii = sides.get(edge).copied().unwrap_or(1.0) * fh.form[0];
-        Ok((ii * k).abs() * self.fade <= tol)
-    }
-
-    /// Solve the rounds: freeze the frames at the last solution (the fixed nets at first), fit.
-    fn solve(&self, stations: &[Station]) -> SplineResult<Vec<Vec3>> {
-        let mut x: Vec<Vec3> = self.maps.iter().map(|m| m.base).collect();
-        let size = self.size();
-        // Which unknowns share a row, once: their order for a narrow band.
-        let jets: Vec<(Jet, Option<Jet>)> = stations
-            .iter()
-            .map(|st| match st {
-                Station::Edge { patch, along_u, s, .. } => {
-                    let (u, v) = if *along_u { (*s, 0.0) } else { (0.0, *s) };
-                    Ok((self.jet(*patch, u, v)?, None))
-                }
-                Station::Spoke { spoke, t, .. } => Ok((self.jet(*spoke, 1.0, *t)?, Some(self.jet((*spoke + 1) % self.n, *t, 1.0)?))),
-            })
-            .collect::<SplineResult<_>>()?;
-        let mut pattern = Normal::pattern(self.unknowns)?;
-        self.assemble(&mut pattern, stations, &jets, &x, false)?;
-        for k in 0..self.n {
-            self.energy(k, &mut pattern, size)?;
-        }
-        let order = pattern.ordering()?;
-        // The energy does not change from round to round: assembled once.
-        let mut base = Normal::banded(&order, &self.maps)?;
-        for k in 0..self.n {
-            self.energy(k, &mut base, size)?;
-        }
-        for round in 0..ROUNDS {
-            // The first round has no frames of its own to freeze: it fits the edges' G1 and
-            // the spokes' parametric tangency (opposite cross derivatives) under the energy,
-            // a fair start; the rounds after it ask for G2, and for G1 across the spokes
-            // geometrically, about that start's frames.
-            let first = round == 0;
-            let mut ne = base.clone();
-            self.assemble(&mut ne, stations, &jets, &x, first)?;
-            x = ne.solve()?;
-        }
-        Ok(x)
-    }
-
-    /// The rows of one round about the last solution `x` (`first`: the first round's).
-    fn assemble(&self, ne: &mut Normal, stations: &[Station], jets: &[(Jet, Option<Jet>)], x: &[Vec3], first: bool) -> SplineResult<()> {
-        let size = self.size();
-        for (st, (ja, jb)) in stations.iter().zip(jets) {
-            match st {
-                Station::Edge { along_u, frame, tangent, weight, g2, corner, .. } => {
-                    let jet = ja;
-                    let now = jet.at(x);
-                    let (cross, second, along) = if *along_u { (2, 5, 1) } else { (1, 3, 2) };
-                    let xnu = now[cross];
-                    let speed = xnu.len().max(1e-12 * size);
-                    let wt = weight.sqrt();
-                    // G1.
-                    ne.dot(jet, &[(cross, 1.0)], frame.normal, 0.0, wt / speed);
-                    // Leaving into the patch, about as fast as the edge runs.
-                    // (First round only: after it the energy decides what the conditions leave
-                    // free.)
-                    if first {
-                        let run = now[along].len();
-                        ne.vec(jet, &[(cross, 1.0)], frame.leave * run, WEAK * wt / speed);
-                    }
-                    // G2: the face's normal curvature in the patch's cross direction.
-                    if *g2 > 0.0 && !first {
-                        let (a, b) = (xnu.dot(*tangent), xnu.dot(frame.leave));
-                        // The face's own, and near the corner the other face's curvature along
-                        // the other edge, which the patch has there (it holds both edges):
-                        // compatible targets, the difference fading out with the weights.
-                        let (to, delta) = *corner;
-                        let ii =
-                            a * a * frame.form[0] + 2.0 * a * b * frame.form[1] + b * b * frame.form[2] + (1.0 - g2) * delta * xnu.dot(to).powi(2);
-                        // `n·S_νν = II(S_ν, S_ν)` linearised about the last `S_ν = X`:
-                        // `n·S_νν − 2 II(X, S_ν) = −II(X, X)`, `II(X, ·)` the tangent vector `g`.
-                        let g = *tangent * (a * frame.form[0] + b * frame.form[1])
-                            + frame.leave * (a * frame.form[1] + b * frame.form[2])
-                            + to * ((1.0 - g2) * delta * xnu.dot(to));
-                        ne.rows(&[(jet, second, frame.normal), (jet, cross, g * -2.0)], -ii, g2 * wt * size / (speed * speed));
-                    }
-                }
-                Station::Spoke { spoke, t, weight } => {
-                    let k = *spoke;
-                    let (a, Some(b)) = (ja, jb) else { return invalid("a spoke station's jets") };
-                    let (na, nb) = (a.at(x), b.at(x));
-                    // Fixed α, β at first; then the last solution's own (its B-cross derivative
-                    // in the plane of its A-cross derivative and the spoke's tangent), which
-                    // leaves the iteration free to settle them.
-                    let (alpha, beta) = match (first, frozen_ab(&na, &nb)) {
-                        (false, Some(ab)) => ab,
-                        _ => self.reparameterisation(k, *t)?,
-                    };
-                    let speed = na[1].len().max(nb[2].len()).max(1e-12 * size);
-                    let wt = weight.sqrt();
-                    // G1: `∂S_{k+1}/∂v = −α ∂S_k/∂u + β ∂S/∂t`, the two patches' cross
-                    // derivatives and the spoke in one plane, with fixed α, β.
-                    for axis in [Vec3::new(1.0, 0.0, 0.0), Vec3::new(0.0, 1.0, 0.0), Vec3::new(0.0, 0.0, 1.0)] {
-                        ne.pair(a, &[(1, alpha), (2, -beta)], b, &[(2, 1.0)], axis, 0.0, wt / speed);
-                    }
-                    if first {
-                        continue;
-                    }
-                    // G2: with `X = ∂S_k/∂u = (β ∂S/∂t − ∂S_{k+1}/∂v) / α`, II_k(X, X) =
-                    // II_{k+1}(X, X): `α² n·S_k,uu = n·S_{k+1},vv − 2β n·S_{k+1},uv + β² n·S_uu`
-                    // about the last solution's normal.
-                    let normal = (na[1].cross(na[2]).normalized().unwrap_or(Vec3::ZERO) + nb[1].cross(nb[2]).normalized().unwrap_or(Vec3::ZERO))
-                        .normalized()
-                        .unwrap_or(Vec3::ZERO);
-                    ne.pair(a, &[(3, alpha * alpha)], b, &[(5, -1.0), (4, 2.0 * beta), (3, -beta * beta)], normal, 0.0, wt * size / (speed * speed));
-                }
-            }
-        }
-        Ok(())
-    }
-
-    /// The G1 relation's scalars across spoke `k` at `t`: `∂S_{k+1}/∂v = −α ∂S_k/∂u + β ∂S/∂t`.
-    /// At the side's middle (t = 0) both cross derivatives run along the side, so α is the
-    /// ratio of the two halves' speeds there and β is 0; at the centre α is 1 and β is
-    /// `2 cos(2π/N)`, the relation of N patches about a regular centre (the spokes' tangents
-    /// there an affine image of a regular star); linear between.
-    fn reparameterisation(&self, k: usize, t: f64) -> SplineResult<(f64, f64)> {
-        let a = self.jet(k, 1.0, 0.0)?.fixed;
-        let b = self.jet((k + 1) % self.n, 0.0, 1.0)?.fixed;
-        let (sa, sb) = (a[1].len(), b[2].len());
-        if !(sa > 0.0 && sb > 0.0) {
-            return invalid("a hole edge stops at its side's middle");
-        }
-        let alpha0 = sb / sa;
-        let beta1 = 2.0 * (std::f64::consts::TAU / self.n as f64).cos();
-        Ok((alpha0 + (1.0 - alpha0) * t, beta1 * t))
-    }
-
-    /// The fill's size: the largest distance between two corners of the hole.
-    fn size(&self) -> f64 {
-        let pts: Vec<Vec3> = self.curves.iter().filter_map(|c| c.point(0.0).ok()).collect();
-        let mut s = 0.0f64;
-        for a in &pts {
-            for b in &pts {
-                s = s.max(a.dist(*b));
-            }
-        }
-        s.max(1e-9)
-    }
-
-    /// Patch `k`'s thin-plate energy, by Gauss quadrature on every cell of its spaces.
-    fn energy(&self, k: usize, ne: &mut Normal, size: f64) -> SplineResult<()> {
-        let p = self.patches.get(k).ok_or_else(|| SplineError::Invalid("patch".into()))?;
-        let (bu, bv) = (breaks(&p.uspace), breaks(&p.vspace));
-        // Over the size squared, so that its rows weigh as the (dimensionless) conditions' do
-        // at any scale.
-        let lambda = FAIRNESS / (size * size);
-        for wu in bu.windows(2) {
-            for wv in bv.windows(2) {
-                let (hu, hv) = (wu[1] - wu[0], wv[1] - wv[0]);
-                for (xu, gu) in GAUSS4 {
-                    for (xv, gv) in GAUSS4 {
-                        let u = 0.5 * (wu[0] + wu[1]) + 0.5 * hu * xu;
-                        let v = 0.5 * (wv[0] + wv[1]) + 0.5 * hv * xv;
-                        let jet = self.jet(k, u, v)?;
-                        let wt = (lambda * 0.25 * hu * hv * gu * gv).sqrt();
-                        ne.vec(&jet, &[(3, 1.0)], Vec3::ZERO, wt);
-                        ne.vec(&jet, &[(4, 1.0)], Vec3::ZERO, wt * std::f64::consts::SQRT_2);
-                        ne.vec(&jet, &[(5, 1.0)], Vec3::ZERO, wt);
-                    }
-                }
-            }
-        }
-        Ok(())
-    }
-
-    /// The patches and spokes for the unknowns `x`.
-    fn output(&self, x: &[Vec3]) -> SplineResult<QuadFill> {
-        let c = self.sp.count();
-        let value = |id: Option<usize>| id.and_then(|i| x.get(i)).copied().unwrap_or(Vec3::ZERO);
-        let mut patches = Vec::with_capacity(self.n);
-        for p in &self.patches {
-            let (cu, cv) = (p.uspace.count(), p.vspace.count());
-            // The unknowns' net in Sp ⊗ Sp, carried into the patch's spaces: rows, then columns.
-            let d: Vec<Vec3> = p.dof.iter().map(|id| value(*id)).collect();
-            let mut rows: Vec<Vec<Vec3>> = Vec::with_capacity(c);
-            for j in 0..c {
-                let row: Vec<Vec3> = (0..c).map(|i| d.get(i + c * j).copied().unwrap_or(Vec3::ZERO)).collect();
-                rows.push(embed(&self.sp, &row, &p.uspace)?);
-            }
-            let mut net = vec![HPoint::weighted(Vec3::ZERO, 1.0); cu * cv];
-            for i in 0..cu {
-                let col: Vec<Vec3> = rows.iter().map(|r| r.get(i).copied().unwrap_or(Vec3::ZERO)).collect();
-                let col = embed(&self.sp, &col, &p.vspace)?;
-                for (j, dp) in col.iter().enumerate() {
-                    let idx = i + cu * j;
-                    let (Some(h), Some(w)) = (p.h0.get(idx), p.w.get(idx)) else { return invalid("net") };
-                    // `P = P⁰ + E·D`, weighed as the fixed net is.
-                    let point = *h * (1.0 / *w) + *dp;
-                    if let Some(slot) = net.get_mut(idx) {
-                        *slot = HPoint::weighted(point, *w);
-                    }
-                }
-            }
-            patches.push(NurbsSurface::from_homogeneous(
-                [p.uspace.degree(), p.vspace.degree()],
-                [p.uspace.knots().to_vec(), p.vspace.knots().to_vec()],
-                net,
-            )?);
-        }
-        let g = greville(&self.sp);
-        let centre = self.centre0 + value(Some(0));
-        let mut spokes = Vec::with_capacity(self.n);
-        for k in 0..self.n {
-            let p = self.patches.get(k).ok_or_else(|| SplineError::Invalid("patch".into()))?;
-            let mk = self.middles.get(k).copied().unwrap_or(Vec3::ZERO);
-            let points = (0..c)
-                .map(|j| mk + (self.centre0 - mk) * g.get(j).copied().unwrap_or(0.0) + value(p.dof.get((c - 1) + c * j).copied().flatten()))
-                .collect();
-            spokes.push(Spoke { degree: self.sp.degree(), knots: self.sp.knots().to_vec(), points });
-        }
-        Ok(QuadFill { patches, spokes, centre, edges: Vec::new(), spoke_fits: Vec::new(), spans: 0 })
-    }
-
-    /// What the fill `x` achieves along every edge and spoke, at [`CHECKS`] + 1 stations each.
-    fn measure(
-        &self,
-        x: &[Vec3],
-        lengths: &[f64],
-        frame_at: &mut dyn FnMut(usize, &[f64]) -> SplineResult<Vec<Frame>>,
-    ) -> SplineResult<(Vec<SeamFit>, Vec<SeamFit>)> {
-        let n = self.n;
-        let m = 2 * n;
-        let sides = self.frames_side(frame_at)?;
-        let ts: Vec<f64> = (0..=CHECKS).map(|i| i as f64 / CHECKS as f64).collect();
-        let mut edges = vec![SeamFit::default(); m];
-        for (j, fit) in edges.iter_mut().enumerate() {
-            let curve = self.curves.get(j).ok_or_else(|| SplineError::Invalid("edge".into()))?;
-            // Edge 2k is patch k's `v = 0`; edge 2k + 1 is patch k + 1's `u = 0`, run back.
-            let (patch, along_u) = if j % 2 == 0 { (j / 2, true) } else { ((j / 2 + 1) % n, false) };
-            // Its side's corner is at its start (even) or its end (odd).
-            let (other, here, there) = if j % 2 == 0 { ((j + m - 1) % m, 0.0, 1.0) } else { ((j + 1) % m, 1.0, 0.0) };
-            let (_, delta) = self.corner_terms(j, other, here, there, frame_at, &sides)?;
-            let agrees = self.agrees(j, other, here, there, delta, frame_at, &sides)?;
-            let frames = frame_at(j, &ts)?;
-            let side = sides.get(j).copied().unwrap_or(1.0);
-            for (t, f) in ts.iter().zip(&frames) {
-                let (u, v) = if along_u { (*t, 0.0) } else { (0.0, 1.0 - t) };
-                let s = self.jet(patch, u, v)?.at(x);
-                let [_, d1, _] = curve.derivs(*t)?;
-                let Some(tangent) = d1.normalized() else { continue };
-                let Some(normal) = s[1].cross(s[2]).normalized() else { continue };
-                let fnormal = f.normal * side;
-                let angle = normal.dot(fnormal).clamp(-1.0, 1.0).acos();
-                // The normal curvatures square to the edge: the face's along `leave`, the patch's
-                // along its own tangent square to the edge.
-                let Some(across) = normal.cross(tangent).normalized() else { continue };
-                let mine = second_form(&s, normal, across);
-                let theirs = f.form[2] * side;
-                let jump = (mine - theirs).abs();
-                let from_corner = if j % 2 == 0 { curve.length_to(*t)? } else { lengths.get(j).copied().unwrap_or(0.0) - curve.length_to(*t)? };
-                let share = reach(from_corner, self.fade);
-                worse(&mut fit.angle, angle, *t);
-                worse(&mut fit.curvature, jump, *t);
-                if share >= 1.0 || agrees {
-                    worse(&mut fit.curvature_clear, jump, *t);
-                }
-            }
-        }
-        let centre = self.jet(0, 1.0, 1.0)?.at(x)[0];
-        let mut spokes = vec![SeamFit::default(); n];
-        for (k, fit) in spokes.iter_mut().enumerate() {
-            for t in &ts {
-                let a = self.jet(k, 1.0, *t)?.at(x);
-                let b = self.jet((k + 1) % n, *t, 1.0)?.at(x);
-                let (Some(na), Some(nb)) = (a[1].cross(a[2]).normalized(), b[1].cross(b[2]).normalized()) else { continue };
-                let angle = na.dot(nb).clamp(-1.0, 1.0).acos();
-                let Some(tangent) = a[2].normalized() else { continue };
-                let Some(across) = na.cross(tangent).normalized() else { continue };
-                let jump = (second_form(&a, na, across) - second_form(&b, na, across)).abs();
-                worse(&mut fit.angle, angle, *t);
-                worse(&mut fit.curvature, jump, *t);
-                // Clear of the centre, where N patches meet at one point (as the hole's corners
-                // are, a vertex where seams turn): the vertex enclosure problem of G2 — tensor
-                // patches about a point of N ≠ 4 meet with G2 there only under conditions on
-                // their reparameterisations (J. Peters, "Smooth interpolation of a mesh of
-                // curves", Constr. Approx. 7, 1991; X. Ye and H. Nowacki, "Ensuring compatibility
-                // of G2-continuous surface patches around a nodepoint", CAGD 13, 1996), which the
-                // fit meets only approximately. Measured everywhere, held clear of it.
-                if a[0].dist(centre) >= self.fade {
-                    worse(&mut fit.curvature_clear, jump, *t);
-                }
-            }
-        }
-        Ok((edges, spokes))
-    }
-}
-
-/// The scalars of `∂S_b/∂v = −α ∂S_a/∂u + β ∂S/∂t` that fit two jets across a spoke best (least
-/// squares in the plane of `∂S_a/∂u` and the spoke's tangent `∂S_a/∂v`); `None` when that plane
-/// degenerates or α is not positive.
-fn frozen_ab(a: &[Vec3; 6], b: &[Vec3; 6]) -> Option<(f64, f64)> {
-    let (x, t, y) = (a[1], a[2], b[2]);
-    let (e, f, g) = (x.dot(x), x.dot(t), t.dot(t));
-    let det = e * g - f * f;
-    if !(det > 1e-24 * e * g) {
-        return None;
-    }
-    let (p, r) = (y.dot(x), y.dot(t));
-    let alpha = -(g * p - f * r) / det;
-    let beta = (e * r - f * p) / det;
-    (alpha > 0.0 && alpha.is_finite() && beta.is_finite()).then_some((alpha, beta))
-}
-
-fn worse(w: &mut Worst, value: f64, at: f64) {
-    if value > w.value || !value.is_finite() {
-        *w = Worst { value, at };
-    }
-}
-
-/// The normal curvature of a patch with derivatives `s` along the unit tangent `dir`, about
-/// `normal`: `II(X, X)` for `dir = a S_u + b S_v`.
-fn second_form(s: &[Vec3; 6], normal: Vec3, dir: Vec3) -> f64 {
-    let [_, su, sv, suu, suv, svv] = *s;
-    let (e, f, g) = (su.dot(su), su.dot(sv), sv.dot(sv));
-    let det = e * g - f * f;
-    if !(det > 0.0) {
-        return f64::NAN;
-    }
-    let (du, dv) = (dir.dot(su), dir.dot(sv));
-    let (a, b) = ((g * du - f * dv) / det, (e * dv - f * du) / det);
-    normal.dot(suu) * a * a + 2.0 * normal.dot(suv) * a * b + normal.dot(svv) * b * b
-}
-
-/// The normal equations over the unknown points' coordinates: first only which points share a
-/// row (`Pattern`), then, in the order that pattern gives (reverse Cuthill–McKee, so the
-/// matrix is a narrow band: E. Cuthill and J. McKee, 1969; A. George, 1971), the banded matrix
-/// itself, solved by banded Cholesky.
-/// An unknown point as the solve takes it: `X = base + Σ z_a basis[a]` over the coordinates not
-/// `held` (orthonormal `basis`); a held coordinate is fixed by a hard constraint (its plane's).
-#[derive(Clone, Copy, Debug)]
-struct Map {
-    basis: [Vec3; 3],
-    base: Vec3,
-    held: [bool; 3],
-}
-
-impl Map {
-    const FREE: Map =
-        Map { basis: [Vec3::new(1.0, 0.0, 0.0), Vec3::new(0.0, 1.0, 0.0), Vec3::new(0.0, 0.0, 1.0)], base: Vec3::ZERO, held: [false; 3] };
-}
-
-/// How the unknowns of `Sp ⊗ Sp` enter a patch's homogeneous net (as [`Quilt::jet`] reads
-/// them): the coefficient of unknown `(a, b)` at net point `(i, j)` is
-/// `eu[a][i] ev[b][j] + fu[a][i] fv[b][j] + gu[a][i] gv[b][j]`.
-struct Coefficients<'a> {
-    eu: &'a [Vec<f64>],
-    ev: &'a [Vec<f64>],
-    fu: &'a [Vec<f64>],
-    gu: &'a [Vec<f64>],
-    fv: &'a [Vec<f64>],
-    gv: &'a [Vec<f64>],
-}
-
-impl Coefficients<'_> {
-    fn at(&self, a: usize, b: usize, i: usize, j: usize) -> f64 {
-        let g = |x: &[Vec<f64>], k: usize, l: usize| x.get(k).and_then(|r| r.get(l)).copied().unwrap_or(0.0);
-        g(self.eu, a, i) * g(self.ev, b, j) + g(self.fu, a, i) * g(self.fv, b, j) + g(self.gu, a, i) * g(self.gv, b, j)
-    }
-}
-
-/// The hard constraint that holds a patch's second row of control points (`along_u`: the row
-/// `j = 1` beside its bottom edge; otherwise the column `i = 1` beside its left edge) in the
-/// edge's face's plane `n·p = c`, so that the patch is tangent to the plane along the whole edge:
-/// with the edge's own row in the plane, `S` and its derivative across lie in it exactly (for a
-/// rational net too: `n·(F_ν W − F W_ν) = c W_ν W − c W W_ν`). Each point of that row is
-/// `(h0 + Σ coef·d) / w`; its height `n·(h0 + Σ coef·d) − c w` must vanish, which fixes the
-/// unknowns' components along `n`, `y`, from `G y = r` (`r` the fixed net's heights).
-///
-/// The row's end on the spoke (the side's middle) holds the spoke's own unknown alone, and fixes
-/// it (the spoke's tangent there in the plane: a geometric condition, the same from both patches
-/// beside the spoke). The row's end on the other edge is that edge's second control point, in the
-/// plane already (that edge leaves the corner tangent to the plane). The row's inside points are
-/// the fixed net's own: what of their heights the unknowns cannot follow (a least-squares fit of
-/// `y` to them) is taken off the fixed net, so that `G y = r` holds exactly. Returns the unknowns'
-/// constraints `(id, n, y)`.
-#[allow(clippy::too_many_arguments)]
-fn hold_in_plane(
-    coef: &Coefficients,
-    dof: &[Option<usize>],
-    c: usize,
-    cu: usize,
-    cv: usize,
-    along_u: bool,
-    (normal, offset): (Vec3, f64),
-    h0: &mut [Vec3],
-    w: &[f64],
-) -> SplineResult<Vec<(usize, Vec3, f64)>> {
-    // Along the row: patch net index `t` (0 ..= last), unknown index `a` (1 .. c).
-    let last = if along_u { cu } else { cv }.checked_sub(1).ok_or_else(|| SplineError::Invalid("a patch with no net".into()))?;
-    let net = |t: usize| if along_u { t + cu } else { t * cu + 1 };
-    let g = |a: usize, t: usize| if along_u { coef.at(a, 1, t, 1) } else { coef.at(1, a, 1, t) };
-    let id = |a: usize| if along_u { dof.get(a + c) } else { dof.get(1 + c * a) }.copied().flatten();
-    let height = |h0: &[Vec3], t: usize| -> f64 {
-        let (Some(h), Some(x)) = (h0.get(net(t)), w.get(net(t))) else { return f64::NAN };
-        normal.dot(*h) - offset * x
-    };
-    let ids: Vec<usize> = (1..c).map(|a| id(a).ok_or_else(|| SplineError::Invalid("a held row's unknown".into()))).collect::<SplineResult<_>>()?;
-    // The far end, on the spoke: the spoke's unknown alone.
-    let spoke = c - 1;
-    let gs = g(spoke, last);
-    if !(gs.abs() > 1e-12) || (1..spoke).any(|a| g(a, last).abs() > 1e-12 * gs.abs()) {
-        return invalid("a held row's end on the spoke is not the spoke's own");
-    }
-    let y_spoke = -height(h0, last) / gs;
-    // The near end, the other edge's second control point: in the plane already.
-    let scale = (0..=last).filter_map(|t| h0.get(net(t)).map(|h| h.len())).fold(1.0f64, f64::max);
-    let near = height(h0, 0);
-    if !(near.abs() <= 1e-9 * scale) {
-        return Err(SplineError::Unsupported(format!(
-            "a G2 corner whose edge leaves a planar face's corner {near:e} out of its plane (it must leave tangent to it)"
-        )));
-    }
-    // The inside: y_1 .. y_{c-2} by least squares on the rows 1 .. last − 1.
-    let k = spoke.saturating_sub(1);
-    let mut ata = vec![0.0; k * k];
-    let mut atb = vec![0.0; k];
-    for t in 1..last {
-        let rhs = -height(h0, t) - g(spoke, t) * y_spoke;
-        for a in 0..k {
-            let ga = g(a + 1, t);
-            if let Some(slot) = atb.get_mut(a) {
-                *slot += ga * rhs;
-            }
-            for b in 0..k {
-                if let Some(slot) = ata.get_mut(a * k + b) {
-                    *slot += ga * g(b + 1, t);
-                }
-            }
-        }
-    }
-    let mut y = dense_solve(ata, atb, k)?;
-    y.push(y_spoke);
-    // Take off the fixed net what the unknowns do not follow.
-    for t in 1..last {
-        let follow: f64 = (1..c).map(|a| g(a, t) * y.get(a - 1).copied().unwrap_or(0.0)).sum();
-        let rest = height(h0, t) + follow;
-        if let Some(h) = h0.get_mut(net(t)) {
-            *h -= normal * rest;
-        }
-    }
-    if !y.iter().all(|v| v.is_finite()) {
-        return invalid("a held row's heights are not finite");
-    }
-    Ok(ids.into_iter().zip(y).map(|(i, v)| (i, normal, v)).collect())
-}
-
-/// Solve the dense symmetric positive definite `k × k` system `a x = b` (Cholesky).
-fn dense_solve(mut a: Vec<f64>, mut b: Vec<f64>, k: usize) -> SplineResult<Vec<f64>> {
-    if a.len() != k * k || b.len() != k {
-        return invalid("a dense system's size");
-    }
-    let at = |a: &[f64], i: usize, j: usize| a.get(i * k + j).copied().unwrap_or(0.0);
-    for j in 0..k {
-        let mut d = at(&a, j, j);
-        for p in 0..j {
-            d -= at(&a, j, p) * at(&a, j, p);
-        }
-        if !(d > 0.0) {
-            return invalid("a held row's fit is singular");
-        }
-        let d = d.sqrt();
-        if let Some(slot) = a.get_mut(j * k + j) {
-            *slot = d;
-        }
-        for i in j + 1..k {
-            let mut s = at(&a, i, j);
-            for p in 0..j {
-                s -= at(&a, i, p) * at(&a, j, p);
-            }
-            if let Some(slot) = a.get_mut(i * k + j) {
-                *slot = s / d;
-            }
-        }
-    }
-    for i in 0..k {
-        let mut s = b.get(i).copied().unwrap_or(0.0);
-        for p in 0..i {
-            s -= at(&a, i, p) * b.get(p).copied().unwrap_or(0.0);
-        }
-        if let Some(slot) = b.get_mut(i) {
-            *slot = s / at(&a, i, i);
-        }
-    }
-    for i in (0..k).rev() {
-        let mut s = b.get(i).copied().unwrap_or(0.0);
-        for p in i + 1..k {
-            s -= at(&a, p, i) * b.get(p).copied().unwrap_or(0.0);
-        }
-        if let Some(slot) = b.get_mut(i) {
-            *slot = s / at(&a, i, i);
-        }
-    }
-    Ok(b)
-}
-
-/// Each unknown's [`Map`] from its constraints `(id, n, y)` (`n·X = y`): free where it has
-/// none; with one plane (or the same plane twice, from the two patches beside a spoke, which
-/// must agree to `1e-9` of the hole's size) its component along `n` held; two planes are a
-/// corner between two planar faces, refused before this.
-fn maps_of(unknowns: usize, held: &[(usize, Vec3, f64)], size: f64) -> SplineResult<Vec<Map>> {
-    let mut maps = vec![Map::FREE; unknowns];
-    let mut set: Vec<Option<(Vec3, f64)>> = vec![None; unknowns];
-    for &(id, n, y) in held {
-        let Some(slot) = set.get_mut(id) else { return invalid("a held unknown") };
-        match slot {
-            None => *slot = Some((n, y)),
-            Some((m, z)) => {
-                let same = n.dot(*m);
-                if !((same.abs() - 1.0).abs() <= 1e-12 && (y * same.signum() - *z).abs() <= 1e-9 * size) {
-                    return Err(SplineError::Unsupported(format!("an unknown held in two planes ({y:e} and {z:e} along them)")));
-                }
-            }
-        }
-    }
-    for (map, s) in maps.iter_mut().zip(&set) {
-        let Some((n, y)) = s else { continue };
-        let pick = if n.x.abs() < 0.9 { Vec3::new(1.0, 0.0, 0.0) } else { Vec3::new(0.0, 1.0, 0.0) };
-        let e1 = n.cross(pick).normalized().ok_or_else(|| SplineError::Invalid("a plane's normal".into()))?;
-        let e2 = n.cross(e1);
-        *map = Map { basis: [e1, e2, *n], base: *n * *y, held: [false, false, true] };
-    }
-    Ok(maps)
-}
-
-#[derive(Clone)]
-enum Store {
-    Pattern(Vec<Vec<usize>>),
-    Band { band: Band, pos: Vec<usize> },
-}
-
-#[derive(Clone)]
-struct Normal {
-    points: usize,
-    store: Store,
-    b: Vec<f64>,
-    maps: Vec<Map>,
-}
-
-/// An ordering of the unknown points and the band it gives (in points).
-struct Ordering {
-    pos: Vec<usize>,
-    width: usize,
-}
-
-impl Normal {
-    fn pattern(points: usize) -> SplineResult<Normal> {
-        if points > MAX_UNKNOWN_POINTS {
-            return Err(SplineError::TooLarge(format!("{points} unknown points (at most {MAX_UNKNOWN_POINTS})")));
-        }
-        Ok(Normal { points, store: Store::Pattern(vec![Vec::new(); points]), b: Vec::new(), maps: Vec::new() })
-    }
-
-    /// The banded system in `order`, each unknown point in the coordinates of its [`Map`]: a
-    /// held coordinate is no unknown (its row and column are the identity, its value zero).
-    fn banded(order: &Ordering, maps: &[Map]) -> SplineResult<Normal> {
-        let points = order.pos.len();
-        let n = 3 * points;
-        let bw = 3 * order.width + 2;
-        if n.saturating_mul(bw + 1) > 400_000_000 {
-            return Err(SplineError::TooLarge(format!("a band of {bw} over {n} unknowns")));
-        }
-        if maps.len() != points {
-            return invalid("an unknown without its map");
-        }
-        let mut band = Band::new(n, bw);
-        for (m, map) in maps.iter().enumerate() {
-            let Some(&pm) = order.pos.get(m) else { continue };
-            for (a, held) in map.held.iter().enumerate() {
-                if *held {
-                    band.add(3 * pm + a, 3 * pm + a, 1.0);
-                }
-            }
-        }
-        Ok(Normal { points, store: Store::Band { band, pos: order.pos.clone() }, b: vec![0.0; n], maps: maps.to_vec() })
-    }
-
-    /// The reverse Cuthill–McKee order of the pattern's points (each component from a point of
-    /// least degree, neighbours by rising degree), and its band.
-    fn ordering(&self) -> SplineResult<Ordering> {
-        let Store::Pattern(adj) = &self.store else { return invalid("no pattern") };
-        let adj: Vec<Vec<usize>> = adj
-            .iter()
-            .map(|v| {
-                let mut v = v.clone();
-                v.sort_unstable();
-                v.dedup();
-                v
-            })
-            .collect();
-        let degree = |i: usize| adj.get(i).map(|v| v.len()).unwrap_or(0);
-        let mut seen = vec![false; self.points];
-        let mut order: Vec<usize> = Vec::with_capacity(self.points);
-        while let Some(start) = (0..self.points).filter(|i| !seen.get(*i).copied().unwrap_or(true)).min_by_key(|i| degree(*i)) {
-            if let Some(slot) = seen.get_mut(start) {
-                *slot = true;
-            }
-            let mut head = order.len();
-            order.push(start);
-            while let Some(&p) = order.get(head) {
-                head += 1;
-                let mut next: Vec<usize> = adj.get(p).into_iter().flatten().copied().filter(|q| !seen.get(*q).copied().unwrap_or(true)).collect();
-                next.sort_by_key(|q| degree(*q));
-                for q in next {
-                    if let Some(slot) = seen.get_mut(q)
-                        && !*slot
-                    {
-                        *slot = true;
-                        order.push(q);
-                    }
-                }
-            }
-        }
-        order.reverse();
-        let mut pos = vec![0usize; self.points];
-        for (i, p) in order.iter().enumerate() {
-            if let Some(slot) = pos.get_mut(*p) {
-                *slot = i;
-            }
-        }
-        let mut width = 0usize;
-        for (i, v) in adj.iter().enumerate() {
-            for j in v {
-                width = width.max(pos.get(i).copied().unwrap_or(0).abs_diff(pos.get(*j).copied().unwrap_or(0)));
-            }
-        }
-        Ok(Ordering { pos, width })
-    }
-
-    /// Add `w2 · (Σ c_m·X_m − r)²` for the row with vector coefficients `terms`.
-    fn accumulate(&mut self, terms: &[(usize, Vec3)], r: f64, w2: f64) {
-        match &mut self.store {
-            Store::Pattern(adj) => {
-                for &(m, _) in terms {
-                    if let Some(list) = adj.get_mut(m) {
-                        list.extend(terms.iter().map(|(k, _)| *k));
-                    }
-                }
-            }
-            Store::Band { band, pos } => {
-                // In each point's map: X = base + Σ z_a e_a over its free coordinates.
-                let maps = &self.maps;
-                let mut r = r;
-                let mut mapped: Vec<(usize, [f64; 3])> = Vec::with_capacity(terms.len());
-                for &(m, cm) in terms {
-                    let Some(map) = maps.get(m) else { continue };
-                    r -= cm.dot(map.base);
-                    mapped.push((m, std::array::from_fn(|a| if map.held[a] { 0.0 } else { cm.dot(map.basis[a]) })));
-                }
-                for &(m, cm) in &mapped {
-                    let Some(&pm) = pos.get(m) else { continue };
-                    for (a, da) in cm.iter().enumerate() {
-                        let row = 3 * pm + a;
-                        if let Some(slot) = self.b.get_mut(row) {
-                            *slot += w2 * da * r;
-                        }
-                        for &(k, ck) in &mapped {
-                            let Some(&pk) = pos.get(k) else { continue };
-                            for (b, db) in ck.iter().enumerate() {
-                                let col = 3 * pk + b;
-                                if row <= col {
-                                    band.add(row, col, w2 * da * db);
-                                }
+        // The nets.
+        let knots = vec![0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0];
+        let mut patches = Vec::with_capacity(N);
+        for b in &blocks {
+            let mut net = [[Vec3::ZERO; 6]; 6];
+            for (blk, cu, cv, fu, fv) in [(&b.v, &C0, &C0, false, false), (&b.m, &C1, &C0, true, false), (&b.p, &C0, &C1, false, true), (&b.c, &C1, &C1, true, true)] {
+                for ai in 0..3 {
+                    for bj in 0..3 {
+                        let mut q = Vec3::ZERO;
+                        for i in 0..=ai {
+                            for j in 0..=bj {
+                                q += blk[i][j] * (cu[ai][i] * cv[bj][j]);
                             }
                         }
+                        net[if fu { 5 - ai } else { ai }][if fv { 5 - bj } else { bj }] = q;
                     }
                 }
             }
+            let ctrl: Vec<HPoint> = (0..6).flat_map(|j| (0..6).map(move |i| (i, j))).map(|(i, j)| HPoint::weighted(net[i][j], 1.0)).collect();
+            patches.push(NurbsSurface::from_homogeneous([QUAD_DEGREE, QUAD_DEGREE], [knots.clone(), knots.clone()], ctrl)?);
         }
-    }
-
-    /// The row `Σ dir_i · ∂S_i = rhs` over derivatives of jets, each with its own direction,
-    /// weighed.
-    fn rows(&mut self, parts: &[(&Jet, usize, Vec3)], rhs: f64, weight: f64) {
-        if !(weight > 0.0) || !weight.is_finite() {
-            return;
-        }
-        let mut terms: Vec<(usize, Vec3)> = Vec::new();
-        let mut fixed = 0.0;
-        for (jet, d, dir) in parts {
-            fixed += dir.dot(jet.fixed.get(*d).copied().unwrap_or(Vec3::ZERO));
-            for (m, c) in &jet.terms {
-                let v = *dir * c.get(*d).copied().unwrap_or(0.0);
-                match terms.iter_mut().find(|(i, _)| i == m) {
-                    Some(slot) => slot.1 += v,
-                    None => terms.push((*m, v)),
-                }
+        for (k, patch) in patches.iter().enumerate() {
+            // Each patch's bottom row and left column are its hole edges' nets (to rounding).
+            let bottom = self.a[k].bez;
+            let left = self.b[(k + N - 1) % N].bez;
+            let off = (0..6)
+                .map(|i| {
+                    let pb = patch.point(i, 0).project().unwrap_or(Vec3::new(f64::NAN, 0.0, 0.0));
+                    let pl = patch.point(0, i).project().unwrap_or(Vec3::new(f64::NAN, 0.0, 0.0));
+                    pb.dist(bottom[i]).max(pl.dist(left[i]))
+                })
+                .fold(0.0f64, |m, d| if d.is_nan() { f64::INFINITY } else { m.max(d) });
+            if !(off <= self.spec.tol) {
+                return invalid(format!("patch {k}'s boundary misses its hole edges by {off:e}"));
             }
         }
-        self.accumulate(&terms, rhs - fixed, weight * weight);
+        let spokes = (0..N)
+            .map(|k| {
+                let (m, c) = (blocks[k].m, blocks[k].c);
+                let (s0, s1) = ([m[0][0], m[0][1], m[0][2]], [c[0][0], c[0][1], c[0][2]]);
+                let pts = vec![
+                    s0[0],
+                    s0[0] + s0[1] * 0.2,
+                    s0[0] + s0[1] * 0.4 + s0[2] * 0.05,
+                    s1[0] - s1[1] * 0.4 + s1[2] * 0.05,
+                    s1[0] - s1[1] * 0.2,
+                    s1[0],
+                ];
+                Spoke { degree: QUAD_DEGREE, knots: knots.clone(), points: pts }
+            })
+            .collect();
+        Ok(QuadFill { patches, spokes, centre })
     }
+}
 
-    /// The row `dir · Σ mult·∂S = rhs`, weighed.
-    fn dot(&mut self, jet: &Jet, which: &[(usize, f64)], dir: Vec3, rhs: f64, weight: f64) {
-        let parts: Vec<(&Jet, usize, Vec3)> = which.iter().map(|(d, m)| (jet, *d, dir * *m)).collect();
-        self.rows(&parts, rhs, weight);
+/// Patch `k + 1`'s block at `M_k` from patch `k`'s by the spoke's relation (module docs) at its
+/// start: `P[i][0] = M[0][i]`, `P[i][1] = −M[1][i] + β i M[0][i]`,
+/// `P[i][2] = M[2][i] − 2β i M[1][i] + (β² i(i − 1) + δ i) M[0][i]`.
+fn relation_at_middle(m: &Block) -> Block {
+    let mut p = ZERO_BLOCK;
+    for i in 0..3 {
+        let fi = i as f64;
+        p[i][0] = m[0][i];
+        p[i][1] = -m[1][i] + m[0][i] * (BETA * fi);
+        p[i][2] = m[2][i] - m[1][i] * (2.0 * BETA * fi) + m[0][i] * (BETA * BETA * fi * (fi - 1.0) + DELTA * fi);
     }
+    p
+}
 
-    /// The row `dir · (Σ ∂S_a + Σ ∂S_b) = rhs` over two patches' jets, weighed.
-    fn pair(&mut self, a: &Jet, wa: &[(usize, f64)], b: &Jet, wb: &[(usize, f64)], dir: Vec3, rhs: f64, weight: f64) {
-        let mut parts: Vec<(&Jet, usize, Vec3)> = wa.iter().map(|(d, m)| (a, *d, dir * *m)).collect();
-        parts.extend(wb.iter().map(|(d, m)| (b, *d, dir * *m)));
-        self.rows(&parts, rhs, weight);
-    }
-
-    /// The three rows `Σ mult·∂S = rhs`, weighed.
-    fn vec(&mut self, jet: &Jet, which: &[(usize, f64)], rhs: Vec3, weight: f64) {
-        for (axis, r) in [(Vec3::new(1.0, 0.0, 0.0), rhs.x), (Vec3::new(0.0, 1.0, 0.0), rhs.y), (Vec3::new(0.0, 0.0, 1.0), rhs.z)] {
-            self.dot(jet, which, axis, r, weight);
+/// Patch `k + 1`'s block at the centre from patch `k`'s block at `M_k` and at the centre: its
+/// spoke-side curves (`∂ᵘᵐS(1, t)`, quintics from those two blocks) carried across the spoke by
+/// the relation, read at `t = 1`.
+fn relation_to_centre(m: &Block, c: &Block) -> Block {
+    // col_m^(d)(1) for d = 0 … 4.
+    let d = |mm: usize, k: usize| -> Vec3 {
+        let (f0, f1) = (m[mm], c[mm]);
+        match k {
+            0..=2 => f1[k],
+            3 => third_at_one(f0, f1),
+            _ => fourth_at_one(f0, f1),
         }
+    };
+    let (b, dl) = (BETA, DELTA);
+    let mut out = ZERO_BLOCK;
+    for (i, row) in out.iter_mut().enumerate() {
+        let fi = i as f64;
+        row[0] = d(0, i);
+        row[1] = -d(1, i) + d(0, i + 1) * b + d(0, i) * (b * fi);
+        row[2] = d(2, i) - d(1, i + 1) * (2.0 * b) - d(1, i) * (2.0 * b * fi)
+            + d(0, i + 2) * (b * b)
+            + d(0, i + 1) * (2.0 * b * b * fi)
+            + d(0, i) * (b * b * fi * (fi - 1.0))
+            + d(0, i + 1) * dl
+            + d(0, i) * (dl * fi);
     }
-
-    fn solve(self) -> SplineResult<Vec<Vec3>> {
-        let Store::Band { band, pos } = self.store else { return invalid("no matrix") };
-        let x = band.solve_fast(self.b)?;
-        let at = |i: usize| x.get(i).copied().unwrap_or(0.0);
-        Ok(pos
-            .iter()
-            .zip(&self.maps)
-            .map(|(p, map)| (0..3).filter(|a| !map.held[*a]).fold(map.base, |acc, a| acc + map.basis[a] * at(3 * p + a)))
-            .collect())
-    }
+    out
 }
 
 #[cfg(test)]

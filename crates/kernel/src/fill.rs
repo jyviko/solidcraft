@@ -20,7 +20,7 @@ use solidcraft_geom::brep::{self as b, Curve2, eval::CurveEval};
 use solidcraft_geom::bspline::{HPoint, SplineError};
 use solidcraft_geom::fill_general::{Across, MAX_FILL_POINTS};
 use solidcraft_geom::fill_iso::{IsoEdge, IsoFill, IsoSpec};
-use solidcraft_geom::fill_quad::{Frame, QuadEdge, QuadFill, QuadSpec};
+use solidcraft_geom::fill_quad::{QuadEdge, QuadFill, QuadSpec};
 
 use crate::body::Body;
 use crate::bridge::Continuity;
@@ -186,21 +186,22 @@ fn general_fill(
 /// How far (degrees) the loop may turn at a vertex for it not to be a corner of the loop.
 const CORNER_TURN_DEG: f64 = 1.0;
 
-/// The sheet of four-sided patches on the hole `chain` of `body`'s own edges, one per corner of
-/// the hole (a vertex where it turns), meeting at a centre point, each G2 to the faces beside
-/// its edges and to the next patch across their spoke (`solidcraft_geom::fill_quad`): every
-/// patch within [`PATCH_ANGLE_TOL_DEG`] of its neighbours' normals and `curvature_tol` of
-/// their normal curvature across each seam, clear of the hole's corners. The hole must have two
-/// edges a side, meeting smoothly at its middle (a set-back corner's hole from SMLib is so).
-/// Each hole edge is its patch's boundary row exactly, so its pcurve there is a line (a rational
-/// line on a circular arc's patch); each spoke is new. Its history is over `[body]`: every face
-/// is new, each hole edge the body's own.
-pub(crate) fn quad_patch(body: &Body, chain: &[(usize, bool)], curvature_tol: f64, fade: f64) -> Result<(Body, QuadFill)> {
+/// The sheet of six biquintic patches on the hole `chain` of `body`'s own edges (a set-back
+/// corner of three rounds: its sides alternately a round's section and a planar face's curve, each
+/// two edges meeting smoothly at its middle), meeting at a centre point and G2 to the faces beside
+/// the hole and to each other exactly (`solidcraft_geom::fill_quad`, built, not fitted). Each
+/// edge's face is read off the record: a plane, or a round that beside the edge is its section
+/// moved along one rail ([`round_rail`]). Each hole edge is its patch's boundary row exactly, so
+/// its pcurve there is a line; each spoke is new. Its history is over `[body]`: every face is new,
+/// each hole edge the body's own.
+pub(crate) fn quad_patch(body: &Body, chain: &[(usize, bool)], curvature_tol: f64) -> Result<(Body, QuadFill)> {
     body.require_brep("patch")?;
     let record = crate::native::brep_record(body)?;
     let n = chain.len();
-    if n < 6 || !n.is_multiple_of(2) {
-        return Err(KernelError::Invalid(format!("not supported yet: a G2 corner on a hole of {n} edges (two edges a side, three sides or more)")));
+    if n != 2 * solidcraft_geom::fill_quad::QUAD_SIDES {
+        return Err(KernelError::Invalid(format!(
+            "not supported yet: a G2 corner on a hole of {n} edges (the explicit corner of three rounds: six sides, two edges a side)"
+        )));
     }
     let size = body.size().max(solidcraft_geom::LINEAR_TOL);
     let mut sides = Vec::with_capacity(n);
@@ -226,32 +227,54 @@ pub(crate) fn quad_patch(body: &Body, chain: &[(usize, bool)], curvature_tol: f6
         ));
     };
     let order: Vec<(usize, bool)> = (0..n).filter_map(|k| chain.get((start + k) % n).copied()).collect();
+    let angle_tol = PATCH_ANGLE_TOL_DEG.to_radians();
     let mut edges = Vec::with_capacity(n);
-    let mut mobius = Vec::with_capacity(n);
-    let mut beside = Vec::with_capacity(n);
     for &(e, forward) in &order {
-        let (mut edge, c) = quad_edge(&record, e, forward)?;
-        edge.plane = face_plane(&record, e)?;
-        edges.push(edge);
-        mobius.push(c);
-        beside.push(Beside::new(&record, e, forward, Continuity::G2, size)?);
+        let beside = match face_plane(&record, e)? {
+            Some((normal, offset)) => solidcraft_geom::fill_quad::Beside::Plane { normal, offset },
+            None => round_rail(&record, e, forward, size, angle_tol, curvature_tol)?,
+        };
+        edges.push(quad_edge(&record, e, forward, beside)?);
     }
-    let mut frames = |j: usize, ts: &[f64]| -> std::result::Result<Vec<Frame>, String> {
-        let (Some(face), Some(c), Some(&(e, _))) = (beside.get(j), mobius.get(j), order.get(j)) else { return Err("no such edge".into()) };
-        let edge = record.edges.get(e).ok_or("edge reference")?;
-        let [a, z] = edge.interval;
-        ts.iter()
-            .map(|&s| {
-                // The standard form's parameter back to the edge's, run the loop's way.
-                let t = s / (s + c * (1.0 - s));
-                face.frame(&record, a + (z - a) * t).map_err(|e| e.to_string())?.ok_or_else(|| "an edge has no tangent there".to_string())
-            })
-            .collect()
-    };
-    let spec = QuadSpec { tol: face_tolerance(body), angle_tol: PATCH_ANGLE_TOL_DEG.to_radians(), curvature_tol, fade };
-    let fill = solidcraft_geom::fill_quad::quad_fill(&edges, &mut frames, &spec).map_err(spline_error)?;
-    let made = quad_body(body, &record, &order, &mobius, &fill, face_tolerance(body))?;
+    let spec = QuadSpec { tol: face_tolerance(body), angle_tol, curvature_tol };
+    let fill = solidcraft_geom::fill_quad::quad_fill(&edges, &spec).map_err(spline_error)?;
+    let made = quad_body(body, &record, &order, &fill, face_tolerance(body))?;
     Ok((made, fill))
+}
+
+/// The rail of the round beside record edge `e` (run the loop's way when `forward`): the
+/// direction its face leaves the edge in, into the hole, which must be one direction all along
+/// the edge (within [`PATCH_ANGLE_TOL_DEG`]), with the face's normal curvature along it and its
+/// twist within `curvature_tol` (the round there is its section moved along the rail, to the
+/// second order: a straight edge's round at its setback). Read off the face's record surface, its
+/// exact second derivatives, at stations along the edge.
+fn round_rail(record: &b::Brep, e: usize, forward: bool, size: f64, angle_tol: f64, curvature_tol: f64) -> Result<solidcraft_geom::fill_quad::Beside> {
+    const STATIONS: usize = 8;
+    let face = Beside::new(record, e, forward, Continuity::G2, size)?;
+    let edge = record.edges.get(e).ok_or_else(|| KernelError::Failed("patch: edge reference".into()))?;
+    let [a, z] = edge.interval;
+    let mut frames = Vec::with_capacity(STATIONS + 1);
+    for i in 0..=STATIONS {
+        let t = a + (z - a) * i as f64 / STATIONS as f64;
+        frames.push(face.frame(record, t)?.ok_or_else(|| KernelError::Invalid(format!("hole edge {e} has no tangent")))?);
+    }
+    let sum = frames.iter().fold(Vec3::ZERO, |s, f| s + f.leave);
+    let rail = sum.normalized().ok_or_else(|| KernelError::Invalid(format!("the face beside hole edge {e} leaves it in no one direction")))?;
+    let unsupported = |why: String| {
+        KernelError::Invalid(format!(
+            "not supported yet: a G2 corner whose round beside hole edge {e} {why} (the explicit corner takes a straight edge's round, its section moved along the edge)"
+        ))
+    };
+    for f in &frames {
+        let turn = f.leave.cross(rail).len().min(1.0).asin();
+        if !(turn <= angle_tol) {
+            return Err(unsupported(format!("turns {:.4}° along the section", turn.to_degrees())));
+        }
+        if !(f.form[1].abs() <= curvature_tol && f.form[2].abs() <= curvature_tol) {
+            return Err(unsupported(format!("curves along its rail ({:e} per mm, twist {:e})", f.form[2], f.form[1])));
+        }
+    }
+    Ok(solidcraft_geom::fill_quad::Beside::Rail { rail })
 }
 
 /// The plane `n·p = c` (unit `n`) of the one face beside record edge `e`, when it is planar.
@@ -271,10 +294,10 @@ fn face_plane(record: &b::Brep, e: usize) -> Result<Option<(Vec3, f64)>> {
     Ok(Some((n, n.dot(origin))))
 }
 
-/// A hole edge as the four-sided fill takes it: the piece of its curve on its interval, on
-/// `[0, 1]`, run the loop's way, rational in standard form (end weights one) by the linear
-/// rational change `s = c·t / (1 − t + c·t)` of its parameter `t`; with that `c` (1: none).
-fn quad_edge(record: &b::Brep, e: usize, forward: bool) -> Result<(QuadEdge, f64)> {
+/// A hole edge as the explicit corner takes it: the piece of its curve on its interval, on
+/// `[0, 1]` (an affine change of its parameter), run the loop's way. A rational piece is refused:
+/// the corner's edges are an eased setback's polynomial quintics.
+fn quad_edge(record: &b::Brep, e: usize, forward: bool, beside: solidcraft_geom::fill_quad::Beside) -> Result<QuadEdge> {
     let edge = record.edges.get(e).ok_or_else(|| KernelError::Failed("patch: edge reference".into()))?;
     let v3 = |p: &[f64; 3]| Vec3::new(p[0], p[1], p[2]);
     let [a, z] = edge.interval;
@@ -289,11 +312,11 @@ fn quad_edge(record: &b::Brep, e: usize, forward: bool) -> Result<(QuadEdge, f64
         b::Curve::Spline { knots, points } => {
             (knots.len().saturating_sub(points.len() + 1), knots.clone(), points.iter().map(|p| HPoint::weighted(v3(p), 1.0)).collect())
         }
-        b::Curve::RationalSpline { knots, homogeneous } => (
-            knots.len().saturating_sub(homogeneous.len() + 1),
-            knots.clone(),
-            homogeneous.iter().map(|h| HPoint { x: h[0], y: h[1], z: h[2], w: h[3] }).collect(),
-        ),
+        b::Curve::RationalSpline { .. } => {
+            return Err(KernelError::Invalid(format!(
+                "not supported yet: a G2 corner on edge {e}, a rational curve (the explicit corner takes polynomial edges: an eased setback's)"
+            )));
+        }
         _ => {
             return Err(KernelError::Invalid(format!(
                 "not supported yet: a G2 corner on edge {e}, a polyline, conic or traced curve with no NURBS form"
@@ -306,7 +329,6 @@ fn quad_edge(record: &b::Brep, e: usize, forward: bool) -> Result<(QuadEdge, f64
         h.reverse();
     }
     let p = degree;
-    let count = h.len();
     let mut unit: Vec<f64> = knots.iter().map(|k| ((k - a) / (z - a)).clamp(0.0, 1.0)).collect();
     // The ends exactly (the map's rounding).
     let nk = unit.len();
@@ -319,26 +341,15 @@ fn quad_edge(record: &b::Brep, e: usize, forward: bool) -> Result<(QuadEdge, f64
     }
     let points: Vec<Vec3> =
         h.iter().map(|x| x.project()).collect::<Option<_>>().ok_or_else(|| KernelError::Invalid("a hole edge has a zero weight".into()))?;
-    let w: Vec<f64> = h.iter().map(|x| x.w).collect();
-    let (Some(&w0), Some(&wp)) = (w.first(), w.last()) else { return Err(KernelError::Failed("patch: an empty edge".into())) };
-    if w.iter().all(|x| (x - w0).abs() <= 1e-14 * w0.abs()) {
-        return Ok((QuadEdge { degree: p, knots: unit, points, weights: Vec::new(), plane: None }, 1.0));
-    }
-    if count != p + 1 || !(w0 > 0.0 && wp > 0.0) {
-        return Err(KernelError::Invalid(format!("not supported yet: a G2 corner on edge {e}, a rational curve of more than one piece")));
-    }
-    // w'ᵢ = wᵢ·c^(p−i) / w_p, with c^p = w_p / w₀: both ends one.
-    let c = (wp / w0).powf(1.0 / p as f64);
-    let weights: Vec<f64> = w.iter().enumerate().map(|(i, x)| x * c.powi((p - i) as i32) / wp).collect();
-    Ok((QuadEdge { degree: p, knots: unit, points, weights, plane: None }, c))
+    Ok(QuadEdge { degree: p, knots: unit, points, weights: Vec::new(), beside })
 }
 
 /// The sheet of the four-sided fill's patches on the hole `order` (edge 0 starting at a corner),
 /// each edge whole on its record, the spokes new edges from each side's middle to the centre;
-/// a hole edge's pcurve the line (rational for a standard-form edge, `mobius[j]` its change of
-/// parameter) its patch gives it, a spoke's the line along its side of the square. Its history
+/// a hole edge's pcurve the line its patch gives it (affine in the edge's parameter), a spoke's
+/// the line along its side of the square. Its history
 /// is over `[body]`: every face new, each hole edge the body's own, each spoke new.
-fn quad_body(body: &Body, record: &b::Brep, order: &[(usize, bool)], mobius: &[f64], fill: &QuadFill, tol: f64) -> Result<Body> {
+fn quad_body(body: &Body, record: &b::Brep, order: &[(usize, bool)], fill: &QuadFill, tol: f64) -> Result<Body> {
     let fail = |m: &str| KernelError::Failed(format!("patch: {m}"));
     let index = |n: usize| u32::try_from(n).map_err(|_| fail("budget"));
     let n = fill.patches.len();
@@ -379,18 +390,13 @@ fn quad_body(body: &Body, record: &b::Brep, order: &[(usize, bool)], mobius: &[f
         knots: vec![interval[0], interval[0], interval[1], interval[1]],
         points: at.to_vec(),
     };
-    // A hole edge's pcurve: `uv(s)` affine in the standard form's `s`, rational linear in the
-    // edge's own parameter.
+    // A hole edge's pcurve: `uv` affine in the edge's own parameter, `uv[0]` at the loop's start
+    // of the edge.
     let edge_use = |j: usize, uv: [[f64; 2]; 2]| -> Result<PartUse> {
-        let (&(e, forward), &c) = (order.get(j).ok_or_else(|| fail("side"))?, mobius.get(j).ok_or_else(|| fail("side"))?);
+        let &(e, forward) = order.get(j).ok_or_else(|| fail("side"))?;
         let edge = record.edges.get(e).ok_or_else(|| fail("edge reference"))?;
-        let [a, z] = edge.interval;
-        // uv[0] at s = 0 (the loop's start of the edge), uv[1] at s = 1; weight c at s = 1.
-        let (first, last) = if forward { ((uv[0], 1.0), (uv[1], c)) } else { ((uv[1], c), (uv[0], 1.0)) };
-        let given = Curve2::RationalSpline {
-            knots: vec![a, a, z, z],
-            homogeneous: vec![[first.0[0] * first.1, first.0[1] * first.1, first.1], [last.0[0] * last.1, last.0[1] * last.1, last.1]],
-        };
+        let at = if forward { uv } else { [uv[1], uv[0]] };
+        let given = line(edge.interval, at);
         Ok(PartUse { edge: index(j)?, forward, given: Some(given) })
     };
     let mut faces = Vec::with_capacity(n);
@@ -656,6 +662,18 @@ impl Beside {
 /// The continuity order a [`Continuity`] asks: 0 (G0) … n, the one place it is read as a number.
 fn continuity_order(g: Continuity) -> usize {
     g.conditions().saturating_sub(1)
+}
+
+/// What the face beside an edge is at a point of it ([`Beside::frame`]).
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Frame {
+    /// The face's outward unit normal.
+    normal: Vec3,
+    /// The unit direction the face leaves the edge in, away from it (into the hole).
+    leave: Vec3,
+    /// The face's second fundamental form about `normal` on the frame `(t, leave)`, `t` the
+    /// edge's unit tangent the loop's way: `[II(t, t), II(t, leave), II(leave, leave)]`.
+    form: [f64; 3],
 }
 
 impl Beside {

@@ -1015,8 +1015,8 @@ case(T7, "014-curved-edge-r2", "an r2 round on the top edge of a cylinder r10 h2
 case(T7, "015-corner-g2-patch", "three r5 rounds at a corner with the g2 corner patch",
      [F(corner, 5, corner="g2")],
      {"body_count": 1, "faces": 15, "bbox": {"min": [0, 0, 0], "max": [60, 40, 20]},
-      "continuity": {"near": [60, 40, 20], "within_mm": 15, "clear_mm": 1.2, "curvature_jump_per_mm": 0.001}},
-     "the corner set back 1.5 r = 7.5 and filled with six four-sided patches about a centre point, one per corner of the hole, each G2 to its round or face and to its two neighbouring patches; no closed-form volume; one valid body of 15 faces (the box's 6, the 3 rounds, the 6 patches, as SMLib's own setback corner, 013), within the box; across every seam of the corner the curvature jump is at most 1e-3 per mm (the ball's corner, 009, jumps 1/r = 0.2) clear of the vertices where seams turn: the six points where a round's section ends on a face, where the round's own G1 seam with the face ends, the sides' middles and the patches' centre (the patches pass from one curvature to the other within a tenth of the hole's size, 1.06 mm: 1.2 mm covers it)",
+      "continuity": {"near": [60, 40, 20], "within_mm": 15, "clear_mm": 0, "curvature_jump_per_mm": 1e-6}},
+     "the corner set back by its ellipsoid, 1.25 sqrt 2 r = 8.84, its rounds eased into their curvature-continuous sections over 1.55 before it, and filled with six biquintic patches about a centre point, built (not fitted) G2 to the rounds, the faces and each other; no closed-form volume; one valid body of 15 faces (the box's 6, the 3 rounds, the 6 patches, as SMLib's own setback corner, 013), within the box; across every seam of the corner, along its whole length, its ends included, the curvature jump is at most 1e-6 per mm (rounding; the ball's corner, 009, jumps 1/r = 0.2)",
      base=B1, source="invariants")
 notch = [[50, 20, 10], [40, 30, 10], [40, 20, 15]]
 case(T7, "019-concave-corner-g2-patch", "three concave r5 rounds at the inner corner of a 20x20x10 notch, with the g2 corner patch",
