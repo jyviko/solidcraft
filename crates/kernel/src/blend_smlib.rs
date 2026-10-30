@@ -29,6 +29,12 @@ pub(crate) fn fillet(body: &Body, edges: &[Vec3], radius: f64) -> Result<Body> {
     imp::blend(body, "fillet", Kind::Round, edges, &vec![radius; edges.len()])
 }
 
+/// [`fillet`], with the picks whose edges a larger, overflowing round removed whole.
+pub(crate) fn fillet_removing(body: &Body, edges: &[Vec3], radius: f64) -> Result<(Body, Vec<Vec3>)> {
+    let (b, dropped) = imp::blend_dropping(body, "fillet", Kind::Round, edges, &vec![radius; edges.len()])?;
+    Ok((b, edges.iter().zip(dropped).filter(|(_, d)| *d).map(|(p, _)| *p).collect()))
+}
+
 /// Each edge rounded at its own radius ([`crate::fillet_each`]).
 pub(crate) fn fillet_each(body: &Body, edges: &[Vec3], radii: &[f64]) -> Result<Body> {
     if radii.len() != edges.len() {
@@ -200,6 +206,12 @@ mod imp {
     }
 
     pub(super) fn blend(body: &Body, what: &str, kind: Kind, edges: &[Vec3], sizes: &[f64]) -> Result<Body> {
+        blend_dropping(body, what, kind, edges, sizes).map(|(b, _)| b)
+    }
+
+    /// [`blend`], with whether each of `edges` picked an edge a larger round removed whole: a
+    /// round overflowing its faces is built first, and an edge it takes away is gone.
+    pub(super) fn blend_dropping(body: &Body, what: &str, kind: Kind, edges: &[Vec3], sizes: &[f64]) -> Result<(Body, Vec<bool>)> {
         body.require_brep(what)?;
         sizes_ok(what, sizes)?;
         let picked = resolve(body, edges)?;
@@ -209,7 +221,9 @@ mod imp {
         }
         let kind = blend_kind(kind);
         let tol = pick_tolerance(body);
-        run(body, what, &picked.edges, |b| b.blend(kind, &picked.points, sizes, tol)).map_err(|e| crate::blend::with_continuation(e, next))
+        run_with(body, what, &picked.edges, &[], |b| b.blend_dropping(kind, &picked.points, sizes, tol))
+            .map(|(out, dropped, _)| (out, dropped))
+            .map_err(|e| crate::blend::with_continuation(e, next))
     }
 
     /// Rounds with corner setbacks: each corner point picks the body's nearest vertex (within
