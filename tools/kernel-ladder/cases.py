@@ -1018,13 +1018,13 @@ case(T7, "015-corner-g2-patch", "three r5 rounds at a corner with the g2 corner 
       "continuity": {"near": [60, 40, 20], "within_mm": 15, "clear_mm": 0, "curvature_jump_per_mm": 1e-6}},
      "the corner set back by its ellipsoid, 1.25 sqrt 2 r = 8.84, its rounds eased into their curvature-continuous sections over 1.55 before it, and filled with six biquintic patches about a centre point, built (not fitted) G2 to the rounds, the faces and each other; no closed-form volume; one valid body of 15 faces (the box's 6, the 3 rounds, the 6 patches, as SMLib's own setback corner, 013), within the box; across every seam of the corner, along its whole length, its ends included, the curvature jump is at most 1e-6 per mm (rounding; the ball's corner, 009, jumps 1/r = 0.2)",
      base=B1, source="invariants")
-notch = [[50, 20, 10], [40, 30, 10], [40, 20, 15]]
-case(T7, "019-concave-corner-g2-patch", "three concave r5 rounds at the inner corner of a 20x20x10 notch, with the g2 corner patch",
-     [box([40, 20, 10], 30, 30, 20, body_name="Notch"), C("solid.combine", target="Part", tools=["Notch"], operation="cut"),
+notch = [[50, 20, 5], [40, 30, 5], [40, 20, 12]]
+case(T7, "019-concave-corner-g2-patch", "three concave r5 rounds at the inner corner of a 20x20x15 notch, with the g2 corner patch",
+     [box([40, 20, 5], 30, 30, 25, body_name="Notch"), C("solid.combine", target="Part", tools=["Notch"], operation="cut"),
       F(notch, 5, corner="g2")],
      {"body_count": 1, "faces": 18, "bbox": {"min": [0, 0, 0], "max": [60, 40, 20]},
-      "continuity": {"near": [40, 20, 10], "within_mm": 11, "clear_mm": 0, "curvature_jump_per_mm": 1e-6}},
-     "the notch's inner corner (40,20,10), three concave edges, set back by its ellipsoid scaled to fit the notch's 10 mm vertical edge (1.25 sqrt 2 r = 8.84 and its ease 1.55 would take 10.39; the scale 1.1785 gives 8.33 and 1.67, just under 10) and filled with six biquintic patches about a centre point, built G2 to the rounds, the faces and each other; one valid body with the faces of the ball corner but its sphere (12) and the six patches (18); across every seam of the corner, along its whole length, its ends included, the curvature jump is at most 1e-6 per mm (the ball's corner jumps 1/r = 0.2; within 11 mm of the corner: the hole reaches 8.33 sqrt 2; the vertical round, 1.67 mm long past its setback, meets its faces 11.2 mm out, with the G1 jump every round has)",
+      "continuity": {"near": [40, 20, 5], "within_mm": 11, "clear_mm": 0, "curvature_jump_per_mm": 1e-6}},
+     "the notch's inner corner (40,20,5), three concave edges, set back by its ellipsoid, 1.25 sqrt 2 r = 8.84, its rounds eased over 0.8 r = 4 before it (together 12.84, within the notch's 15 mm vertical edge), and filled with six biquintic patches about a centre point, built G2 to the rounds, the faces and each other; one valid body with the faces of the ball corner but its sphere (12) and the six patches (18); across every seam of the corner, along its whole length, its ends included, the curvature jump is at most 1e-6 per mm (the ball's corner jumps 1/r = 0.2; within 11 mm of the corner: the hole's sections end 10.2 from it; the rounds' own G1 seams with the faces run past 15 mm)",
      base=B1, source="invariants")
 V7 = V5 - 2 * SPANDREL * 25 * 20 - SPANDREL * 9 * 60 + SPANDREL * 1 * 2 * PI * (8 + XBAR * 1)
 case(T7, "017-part-rounds", "the running part: r5 on the front vertical edges, r3 on the back wall's top front edge, r1 where the boss meets the top",

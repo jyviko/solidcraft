@@ -297,7 +297,6 @@ fn corner_vertex(body: &Body, faces: &Faces, at: Vec3) -> Option<u32> {
 /// face between two of the edges, where their rails cross.
 struct CornerFrame {
     away: Vec<Vec3>,
-    rail: Vec<f64>,
     faces: Vec<CornerFace>,
     /// Each edge: its record index, its length and the vertex at its other end.
     edges: Vec<(usize, f64, u32)>,
@@ -311,9 +310,6 @@ struct CornerFace {
     normal: Vec3,
     /// Where the rails of `i` and `j` cross on the face, from the vertex.
     crossing: Vec3,
-    /// The unit directions in the face square to `i` and to `j`, into the face.
-    into_i: Vec3,
-    into_j: Vec3,
 }
 
 /// The corner of rounds of `radius` at `vertex`: on each face at the corner, the contact lines
@@ -360,11 +356,9 @@ fn corner_frame(faces: &Faces, vertex: u32, radius: f64) -> Option<CornerFrame> 
             j,
             normal: faces.plane_normal(f as usize)?,
             crossing: (u * dj + w * di) * (1.0 / sin),
-            into_i: (w - u * cos).normalized()?,
-            into_j: (u - w * cos).normalized()?,
         });
     }
-    Some(CornerFrame { away, rail, faces: corner_faces, edges })
+    Some(CornerFrame { away, faces: corner_faces, edges })
 }
 
 /// The least setback a corner of rounds of `radius` at `vertex` takes: a setback must reach past
@@ -390,8 +384,7 @@ pub struct CornerSetback {
     pub scale: f64,
     /// `scale` times `least`: the corner's default setback.
     pub setback: f64,
-    /// The rounds' ease before the setback: the longest, over the rounds' contact lines, from
-    /// where the ellipsoid scaled by `scale` crosses one to the setback.
+    /// The rounds' ease before the setback ([`crate::corner_g2::ease`]).
     pub ease: f64,
 }
 
@@ -402,8 +395,8 @@ pub struct CornerSetback {
 /// (`solidcraft_geom::ellipsoid`: exact at a three-edge corner, least squares at four or more
 /// edges). Its intercept on each edge is the least setback there (`sqrt 2 r` at a box corner);
 /// the corner's setback is [`crate::corner_g2::SETBACK_SCALE`] times the largest (SMLib keeps one
-/// per corner), and the ease the longest stretch from where the ellipsoid so scaled crosses a
-/// round's contact line to the setback. Where the setback and its ease would not fit an edge of
+/// per corner), and the rounds ease into their curvature-continuous sections over
+/// [`crate::corner_g2::ease`] before it. Where the setback and its ease would not fit an edge of
 /// the corner (SMLib needs them shorter than every edge there), the scale shrinks towards 1 until
 /// they do ([`default_setbacks`], the corner alone: its edges' other ends not set back); refused
 /// where not even the bare intercept and its ease fit, naming the edge length that would. `None`
@@ -421,9 +414,9 @@ pub fn fillet_g2_corner_setback(body: &Body, at: Vec3, radius: f64) -> Result<Op
 /// corner named for messages.
 struct CornerEllipsoid {
     frame: CornerFrame,
-    ellipsoid: solidcraft_geom::ellipsoid::CentredEllipsoid,
     least: f64,
     named: String,
+    radius: f64,
 }
 
 impl CornerEllipsoid {
@@ -448,25 +441,13 @@ impl CornerEllipsoid {
         if !(least.is_finite() && least > 0.0) {
             return Err(missed(&named));
         }
-        Ok(Some(CornerEllipsoid { frame, ellipsoid, least, named }))
+        Ok(Some(CornerEllipsoid { frame, least, named, radius }))
     }
 
-    /// The setback and ease with the ellipsoid scaled by `k`: `k` times the least setback, and
-    /// the longest stretch from where the scaled ellipsoid crosses a round's contact line to it.
-    fn at_scale(&self, k: f64) -> Result<CornerSetback> {
-        let setback = k * self.least;
-        let mut ease: f64 = 0.0;
-        for f in &self.frame.faces {
-            for (e, into) in [(f.i, f.into_i), (f.j, f.into_j)] {
-                let (u, d) = (*self.frame.away.get(e).ok_or_else(|| missed(&self.named))?, *self.frame.rail.get(e).ok_or_else(|| missed(&self.named))?);
-                let crosses = self.ellipsoid.line_exit(into * d, u, k).ok_or_else(|| missed(&self.named))?;
-                ease = ease.max(setback - crosses);
-            }
-        }
-        if !ease.is_finite() {
-            return Err(missed(&self.named));
-        }
-        Ok(CornerSetback { least: self.least, scale: k, setback, ease })
+    /// The setback and ease with the ellipsoid scaled by `k`: `k` times the least setback, and the
+    /// rounds' ease before it ([`crate::corner_g2::ease`]).
+    fn at_scale(&self, k: f64) -> CornerSetback {
+        CornerSetback { least: self.least, scale: k, setback: k * self.least, ease: crate::corner_g2::ease(self.radius) }
     }
 }
 
@@ -476,36 +457,32 @@ fn missed(named: &str) -> KernelError {
 
 /// The default setbacks of the G2 corners at `corners` (each with the setback given at it, if
 /// any): by each corner's ellipsoid at [`crate::corner_g2::SETBACK_SCALE`] where its setback and
-/// ease fit every edge at it, else at the largest scale down to 1 at which they do. SMLib needs a
-/// setback and its ease shorter than every edge at the corner, and where the edge's other end is
-/// set back too, the four together shorter than it: on such an edge a corner's share is the edge
-/// less a given setback and ease at the other end, or, where the other end's is a default too
-/// and the two do not fit, the edge in proportion to the two unshrunk. Refused where not even the
-/// bare intercept (scale 1) and its ease fit, naming the length the corner needs. `None` for a
-/// corner the ellipsoid cannot read.
+/// the rounds' ease before it ([`crate::corner_g2::ease`]) fit every edge at it, else at the
+/// largest scale down to 1 at which they do. SMLib needs a setback and its ease shorter than every
+/// edge at the corner, and where the edge's other end is set back too, the four together shorter
+/// than it: on such an edge a corner's share is the edge less a given setback and ease at the
+/// other end, or, where the other end's is a default too and the two do not fit, the edge in
+/// proportion to the two unshrunk. Refused where not even the bare intercept (scale 1) and its
+/// ease fit, or a given setback and its ease do not, naming the length the corner needs. `None`
+/// for a corner the ellipsoid cannot read.
 fn default_setbacks(faces: &Faces, corners: &[(u32, Option<f64>)], radius: f64) -> Result<Vec<Option<CornerSetback>>> {
     let k0 = crate::corner_g2::SETBACK_SCALE;
+    let ease = crate::corner_g2::ease(radius);
     let ellipsoids: Vec<Option<CornerEllipsoid>> = corners.iter().map(|(v, _)| CornerEllipsoid::of(faces, *v, radius)).collect::<Result<_>>()?;
-    // Each corner's whole setback and ease along its edges: given (with the factor's ease), or the
-    // unshrunk default.
-    let mut whole: Vec<Option<(f64, bool)>> = Vec::with_capacity(corners.len());
-    for ((_, given), e) in corners.iter().zip(&ellipsoids) {
-        whole.push(match (given, e) {
-            (Some(d), _) => Some((d + crate::corner_g2::EASE_FACTOR * radius, false)),
-            (None, Some(e)) => {
-                let s = e.at_scale(k0)?;
-                Some((s.setback + s.ease, true))
-            }
+    // Each corner's whole setback and ease along its edges: given, or the unshrunk default.
+    let whole: Vec<Option<(f64, bool)>> = corners
+        .iter()
+        .zip(&ellipsoids)
+        .map(|((_, given), e)| match (given, e) {
+            (Some(d), _) => Some((d + ease, false)),
+            (None, Some(e)) => Some((e.at_scale(k0).setback + ease, true)),
             (None, None) => None,
-        });
-    }
+        })
+        .collect();
     let mut out = Vec::with_capacity(corners.len());
     for ((given, e), mine) in corners.iter().map(|(_, g)| g).zip(&ellipsoids).zip(&whole) {
-        let (Some(e), None, Some((d, _))) = (e, given, mine) else {
-            out.push(match e {
-                Some(e) if given.is_some() => Some(CornerSetback { least: e.least, scale: k0, setback: e.least * k0, ease: 0.0 }),
-                _ => None,
-            });
+        let (Some(e), Some((d, _))) = (e, mine) else {
+            out.push(None);
             continue;
         };
         // The room this corner has along each edge.
@@ -513,49 +490,57 @@ fn default_setbacks(faces: &Faces, corners: &[(u32, Option<f64>)], radius: f64) 
         let mut short = None;
         for &(_, length, far) in &e.frame.edges {
             let other = corners.iter().position(|(v, _)| *v == far).and_then(|i| whole.get(i).copied().flatten());
-            let here = match other {
-                Some((f, false)) => length - f,
-                Some((f, true)) if d + f >= length => length * d / (d + f),
-                Some(_) => f64::INFINITY,
-                None if *d >= length => length,
-                None => f64::INFINITY,
+            let here = match (other, given) {
+                (Some((f, false)), _) => length - f,
+                (Some((f, true)), None) if d + f >= length => length * d / (d + f),
+                // A default at the other end gives way to a given setback here.
+                (Some((_, true)), Some(_)) => f64::INFINITY,
+                (Some(_), _) => f64::INFINITY,
+                (None, _) if *d >= length => length,
+                (None, _) => f64::INFINITY,
             };
             if here < room {
                 room = here;
                 short = Some(length);
             }
         }
+        let no_room = |setback: f64, what: &str| {
+            let need = setback + ease;
+            KernelError::Invalid(format!(
+                "the G2 corner at {} has no room for its setback: {what} ({setback:.4} mm) and the rounds' ease before it ({ease:.4} mm) take {need:.4} mm along each edge, and its edge of {:.4} mm leaves it {room:.4} (an edge longer than {:.4} mm works)",
+                e.named,
+                short.unwrap_or(room),
+                short.map(|l| l - room + need).unwrap_or(need)
+            ))
+        };
+        if let Some(g) = given {
+            // Below the intercept it is refused by the caller, naming the intercept.
+            if *g >= e.least * (1.0 - 1e-9) && !(g + ease < room) {
+                return Err(no_room(*g, "the given setback"));
+            }
+            out.push(Some(CornerSetback { least: e.least, scale: g / e.least, setback: *g, ease }));
+            continue;
+        }
         let fits = |s: &CornerSetback| s.setback + s.ease < room;
-        let full = e.at_scale(k0)?;
+        let full = e.at_scale(k0);
         if fits(&full) {
             out.push(Some(full));
             continue;
         }
-        let bare = e.at_scale(1.0)?;
-        if !fits(&bare) {
-            let need = bare.setback + bare.ease;
-            return Err(KernelError::Invalid(format!(
-                "the G2 corner at {} has no room for its setback: at the least (the ellipsoid's intercept {:.4} mm and its ease {:.4} mm) it takes {:.4} mm along each edge, and its edge of {:.4} mm leaves it {:.4} (an edge longer than {:.4} mm works)",
-                e.named,
-                bare.setback,
-                bare.ease,
-                need,
-                short.unwrap_or(room),
-                room,
-                short.map(|l| l - room + need).unwrap_or(need)
-            )));
+        if !fits(&e.at_scale(1.0)) {
+            return Err(no_room(e.least, "at the least, the ellipsoid's intercept"));
         }
-        // The largest scale that fits, by bisection (the setback and its ease grow with it).
+        // The largest scale that fits, by bisection.
         let (mut lo, mut hi) = (1.0, k0);
         for _ in 0..60 {
             let mid = 0.5 * (lo + hi);
-            if fits(&e.at_scale(mid)?) {
+            if fits(&e.at_scale(mid)) {
                 lo = mid;
             } else {
                 hi = mid;
             }
         }
-        out.push(Some(e.at_scale(lo)?));
+        out.push(Some(e.at_scale(lo)));
     }
     Ok(out)
 }
@@ -661,9 +646,9 @@ fn g2_corners(body: &Body, edges: &[Vec3], radius: f64, setbacks: &[(Vec3, f64)]
                     p.x, p.y, p.z
                 )));
             }
-            (Some(d), _) => (d, crate::corner_g2::EASE_FACTOR * radius),
+            (Some(d), _) => (d, crate::corner_g2::ease(radius)),
             (None, Some(e)) => (e.setback, e.ease),
-            (None, None) => (crate::corner_g2::DEFAULT_SETBACK_FACTOR * radius, crate::corner_g2::EASE_FACTOR * radius),
+            (None, None) => (crate::corner_g2::DEFAULT_SETBACK_FACTOR * radius, crate::corner_g2::ease(radius)),
         };
         set_back.push((*p, distance));
         eases.push(ease);

@@ -134,7 +134,7 @@ fn the_box_corner_g2_patch_is_a_closed_solid_curvature_continuous_to_its_neighbo
 }
 
 /// Set back 8, as SMLib's own setback test. The rounds keep their circular sections up to where
-/// their ease starts, `a = 8 + EASE_FACTOR r` from the vertex (9.25 at r5), so outside the cube
+/// their ease starts, `a = 8 + EASE_FACTOR r` from the vertex (12 at r5), so outside the cube
 /// `[60 - a, 60] x [40 - a, 40] x [20 - a, 20]` the body is the ball corner's exactly: each cut
 /// by that cube takes the same volume, to what the two cuts and their measures hold (SMLib's
 /// exact volumes, to 1e-8 of each; and each cut's faces on the cube's three faces, at most 3 a²,
@@ -362,8 +362,7 @@ fn a_box_with_every_edge_rounded_has_eight_g2_corners() {
 /// The default setback of a G2 corner, by its ellipsoid through the points where its rounds'
 /// contact lines cross on each face (crossing each face square to it there): at a box corner the
 /// sphere through (r, r, 0), (r, 0, r), (0, r, r), its intercept sqrt 2 r on each edge the least
-/// setback, the setback 1.25 times that, and the ease from where the sphere so scaled crosses the
-/// contact lines, `r sqrt(2 1.25^2 - 1)` along the edge, to the setback. The same at the 60 x 40
+/// setback, the setback 1.25 times that, and the rounds' ease before it 0.8 r. The same at the 60 x 40
 /// x 20 box's r5 corner, the 20 mm box's r3 corner, the 40 x 30 x 20 box's r3 corner and each of
 /// the eight r2 corners of a 30 x 20 x 10 box. A given setback below the intercept is refused
 /// naming it.
@@ -376,7 +375,7 @@ fn the_corner_ellipsoid_sets_the_g2_setback_and_its_ease() {
         let least = 2f64.sqrt() * r;
         assert!((s.least - least).abs() < 1e-9 * r, "{name}: {s:?}");
         assert!((s.setback - k * least).abs() < 1e-9 * r, "{name}: {s:?}");
-        assert!((s.ease - (k * least - r * (2.0 * k * k - 1.0).sqrt())).abs() < 1e-9 * r, "{name}: {s:?}");
+        assert!((s.ease - crate::corner_g2::EASE_FACTOR * r).abs() < 1e-12 * r, "{name}: {s:?}");
     };
     let (body, _) = box_corner();
     check("60 x 40 x 20 box, r5", &body, Vec3::new(60.0, 40.0, 20.0), 5.0);
@@ -413,28 +412,29 @@ fn what_the_g2_corner_cannot_build_is_refused() {
     assert_eq!(measure(&two).unwrap().faces, measure(&plain).unwrap().faces);
 }
 
-/// The 60 x 40 x 20 box with a 20 x 20 x 10 notch cut from its top corner (60, 40, 20): its
-/// inner corner (40, 20, 10) where three concave edges meet, and the notch's outer corner
-/// (60, 20, 10) where the concave edge along x meets two convex ones.
-fn notched() -> Body {
+/// The 60 x 40 x 20 box with a 20 x 20 x `depth` notch cut from its top corner (60, 40, 20): its
+/// inner corner (40, 20, 20 - depth) where three concave edges meet, and the notch's outer
+/// corner (60, 20, 20 - depth) where the concave edge along x meets two convex ones.
+fn notched(depth: f64) -> Body {
     let a = box_solid(Vec3::ZERO, Vec3::new(60.0, 40.0, 20.0)).unwrap();
-    let b = box_solid(Vec3::new(40.0, 20.0, 10.0), Vec3::new(70.0, 50.0, 30.0)).unwrap();
+    let b = box_solid(Vec3::new(40.0, 20.0, 20.0 - depth), Vec3::new(70.0, 50.0, 30.0)).unwrap();
     boolean(&a, &b, BoolOp::Cut).unwrap().unwrap()
 }
 
-/// The notch's inner corner, three concave r5 rounds (ladder 07/019), at its default setback:
-/// the ellipsoid's 1.25 x sqrt 2 r (8.84) and its ease (1.55) would not fit the notch's 10 mm
-/// vertical edge, so the scale shrinks to where they do, 1.1785 (8.33 and 1.67, together just
-/// under 10); one closed valid solid with the ball corner's faces but its sphere (12) and the six
-/// patches; G1 and G2 across every seam along its whole length, where the ball jumps 1 / r.
+/// The inner corner of a notch 15 deep, three concave r5 rounds (ladder 07/019), at its default
+/// setback (8.84, with the ease 4 just under the vertical edge's 15): one closed valid solid with
+/// the ball corner's faces but its sphere (12) and the six patches; G1 and G2 across every seam
+/// along its whole length, where the ball jumps 1 / r. A notch 12 deep leaves its vertical edge
+/// too short for 8.84 and the ease, so the scale shrinks to where they fit, (12 - 4) / sqrt 2 r =
+/// 1.1314; one 11 deep is too short even at the bare intercept, 7.07 and the ease: refused,
+/// naming the length that works.
 #[test]
 fn a_concave_corner_takes_the_g2_patch_too() {
-    let body = notched();
-    let edges = [Vec3::new(50.0, 20.0, 10.0), Vec3::new(40.0, 30.0, 10.0), Vec3::new(40.0, 20.0, 15.0)];
-    let near = Vec3::new(40.0, 20.0, 10.0);
+    let body = notched(15.0);
+    let edges = [Vec3::new(50.0, 20.0, 5.0), Vec3::new(40.0, 30.0, 5.0), Vec3::new(40.0, 20.0, 12.0)];
+    let near = Vec3::new(40.0, 20.0, 5.0);
     let s = fillet_g2_corner_setback(&body, near, 5.0).unwrap().unwrap();
-    eprintln!("concave corner: scale {:.6}, setback {:.6}, ease {:.6} (together {:.9})", s.scale, s.setback, s.ease, s.setback + s.ease);
-    assert!((s.scale - 1.1785).abs() < 1e-4 && s.setback + s.ease < 10.0 && s.setback + s.ease > 10.0 - 1e-9, "{s:?}");
+    assert!((s.scale - crate::corner_g2::SETBACK_SCALE).abs() < 1e-12, "{s:?}");
     let ball = fillet(&body, &edges, 5.0).unwrap();
     let g2 = fillet_g2_corners(&body, &edges, 5.0, &[]).unwrap();
     assert!(g2.validity().is_empty(), "{:?}", g2.validity());
@@ -447,29 +447,32 @@ fn a_concave_corner_takes_the_g2_patch_too() {
     assert_eq!(m.faces, mb.faces - 1 + 6);
     assert!(c.normal_angle_deg <= EXACT_ANGLE_DEG && c.curvature_jump_per_mm <= EXACT_JUMP_PER_MM, "{c:?}");
     assert!(b.curvature_jump_clear_per_mm > 0.19);
-    // A notch 9 mm deep leaves its vertical edge too short for even the bare intercept
-    // (7.07) and its ease (2.07): refused, naming the length that works.
-    let a = box_solid(Vec3::ZERO, Vec3::new(60.0, 40.0, 20.0)).unwrap();
-    let cut = box_solid(Vec3::new(40.0, 20.0, 11.0), Vec3::new(70.0, 50.0, 30.0)).unwrap();
-    let shallow = boolean(&a, &cut, BoolOp::Cut).unwrap().unwrap();
-    let edges = [Vec3::new(50.0, 20.0, 11.0), Vec3::new(40.0, 30.0, 11.0), Vec3::new(40.0, 20.0, 15.0)];
-    let err = fillet_g2_corners(&shallow, &edges, 5.0, &[]).unwrap_err().to_string();
-    eprintln!("9 mm notch: {err}");
-    assert!(err.contains("no room for its setback") && err.contains("an edge longer than 9.1421 mm works"), "{err}");
+    let body = notched(12.0);
+    let edges = [Vec3::new(50.0, 20.0, 8.0), Vec3::new(40.0, 30.0, 8.0), Vec3::new(40.0, 20.0, 12.0)];
+    let s = fillet_g2_corner_setback(&body, Vec3::new(40.0, 20.0, 8.0), 5.0).unwrap().unwrap();
+    eprintln!("12 mm notch: scale {:.6}, setback {:.6}, ease {:.6} (together {:.9})", s.scale, s.setback, s.ease, s.setback + s.ease);
+    assert!((s.scale - 8.0 / (2f64.sqrt() * 5.0)).abs() < 1e-9 && s.setback + s.ease < 12.0, "{s:?}");
+    let g2 = fillet_g2_corners(&body, &edges, 5.0, &[]).unwrap();
+    assert!(crate::validity::validity(&g2).ok());
+    let body = notched(11.0);
+    let edges = [Vec3::new(50.0, 20.0, 9.0), Vec3::new(40.0, 30.0, 9.0), Vec3::new(40.0, 20.0, 15.0)];
+    let err = fillet_g2_corners(&body, &edges, 5.0, &[]).unwrap_err().to_string();
+    eprintln!("11 mm notch: {err}");
+    assert!(err.contains("no room for its setback") && err.contains("an edge longer than 11.0711 mm works"), "{err}");
 }
 
 /// The notch's outer corner, two convex rounds and a concave one: SMLib sets back only a corner
-/// of one convexity, so the G2 corner is refused as not supported (the rolling ball builds). Set
-/// back 7.5, which fits the notch's 10 mm edge (the default and its ease, 10.4, does not).
+/// of one convexity, so the G2 corner is refused as not supported (the rolling ball builds). A
+/// notch 15 deep, set back 7.5 (with the ease, 11.5, it fits the 15 mm edge).
 #[test]
 fn a_mixed_convexity_corner_is_refused() {
-    let body = notched();
-    let edges = [Vec3::new(50.0, 20.0, 10.0), Vec3::new(60.0, 30.0, 10.0), Vec3::new(60.0, 20.0, 15.0)];
+    let body = notched(15.0);
+    let edges = [Vec3::new(50.0, 20.0, 5.0), Vec3::new(60.0, 30.0, 5.0), Vec3::new(60.0, 20.0, 12.0)];
     assert!(fillet(&body, &edges, 5.0).is_ok());
-    let err = fillet_g2_corners(&body, &edges, 5.0, &[(Vec3::new(60.0, 20.0, 10.0), 7.5)]).unwrap_err().to_string();
+    let err = fillet_g2_corners(&body, &edges, 5.0, &[(Vec3::new(60.0, 20.0, 5.0), 7.5)]).unwrap_err().to_string();
     eprintln!("mixed corner: {err}");
     // The refusal names the corner and why: its rounds are not all of one convexity.
-    assert!(err.contains("not supported yet") && err.contains("(60.000, 20.000, 10.000)") && err.contains("all convex or all concave"), "{err}");
+    assert!(err.contains("not supported yet") && err.contains("(60.000, 20.000, 5.000)") && err.contains("all convex or all concave"), "{err}");
 }
 
 /// Curvature-continuous rounds (`fillet_g2`, equivalent radius 5) of the three edges at the box
@@ -497,3 +500,49 @@ fn curvature_rounds_meet_at_a_g2_corner() {
     assert!((a - b).abs() < (s.setback + s.ease).powi(3), "{a} vs {b}");
 }
 
+
+/// The rounds' ease into their curvature-continuous sections before the setback turns their
+/// normal along the edge, most at the section's middle (it moves towards the edge by 0.075 r
+/// there): measured on the exact surface of the round along the box's y edge, along the
+/// bisector of its section, at setback 15 and at the default, the normal turns less than
+/// `atan(0.141 / EASE_FACTOR)` (10.0° at 0.8; the quarter-radius ease turned it 29.5°, the dark
+/// streak where each round met the corner).
+#[test]
+fn the_rounds_ease_turns_their_normal_by_about_ten_degrees() {
+    use solidcraft_geom::brep::eval::SurfaceEval;
+    let (body, edges) = box_corner();
+    let corner = Vec3::new(60.0, 40.0, 20.0);
+    let r = 5.0;
+    let bound = (0.1414 / crate::corner_g2::EASE_FACTOR).atan().to_degrees() + 0.05;
+    for given in [Some(15.0), None] {
+        let g2 = fillet_g2_corners(&body, &edges, r, &given.map(|d| vec![(corner, d)]).unwrap_or_default()).unwrap();
+        let setback = given.unwrap_or_else(|| fillet_g2_corner_setback(&body, corner, r).unwrap().unwrap().setback);
+        let ease = crate::corner_g2::ease(r);
+        let rec = brep_record(&g2).unwrap();
+        // The round along y (x = 60, z = 20) at the middle of the bisector, clear of the ease.
+        let probe = Vec3::new(60.0 - 1.46, 40.0 - setback - ease - 2.0, 20.0 - 1.46);
+        let (face, s) = rec
+            .faces
+            .iter()
+            .filter(|f| !matches!(f.surface, b::Surface::Plane { .. } | b::Surface::PlaneThrough { .. }))
+            .filter_map(|f| SurfaceEval::new(f.parameters()).ok())
+            .enumerate()
+            .find(|(_, s)| s.project(probe, None, 1.0).and_then(|uv| s.point(uv)).is_some_and(|q| q.dist(probe) < 0.2))
+            .unwrap();
+        let mut worst: f64 = 0.0;
+        let bisector = Vec3::new(1.0, 0.0, 1.0).normalized().unwrap();
+        for k in 0..=400 {
+            let y = 40.0 - setback - ease - 0.5 + (ease + 0.5) * k as f64 / 400.0;
+            // The section's middle: the surface point on the bisector through (60, y, 20).
+            let uv = s.project(Vec3::new(60.0, y, 20.0) - bisector * 1.6, None, 2.0).unwrap();
+            let (_, su, sv) = s.derivs(uv[0], uv[1]).unwrap();
+            let mut n = su.cross(sv).normalized().unwrap();
+            if n.dot(bisector) < 0.0 {
+                n = -n;
+            }
+            worst = worst.max(n.dot(bisector).clamp(-1.0, 1.0).acos().to_degrees());
+        }
+        eprintln!("ease {ease} at setback {setback:.4} (face {face}): the normal turns at most {worst:.3}° (bound {bound:.3}°)");
+        assert!(worst < bound && worst > 5.0, "{worst}");
+    }
+}

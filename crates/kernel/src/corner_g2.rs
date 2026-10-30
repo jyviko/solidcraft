@@ -23,8 +23,7 @@ use crate::{KernelError, Result};
 /// A G2 corner's default setback is this times the intercept on its edges of the corner's
 /// ellipsoid through the points where its rounds' contact lines cross
 /// ([`crate::fillet_g2_corner_setback`]; the intercept is `sqrt 2 r` at a box corner, so the
-/// setback 1.77 r), and its rounds' ease runs from where the ellipsoid so scaled crosses their
-/// contact lines to the setback (0.31 r at a box corner).
+/// setback 1.77 r), less where that and the ease ([`ease`]) would not fit an edge at the corner.
 pub const SETBACK_SCALE: f64 = 1.25;
 
 /// The setback of a G2 corner the ellipsoid cannot read (one with a curved face or edge): this
@@ -33,15 +32,22 @@ pub const SETBACK_SCALE: f64 = 1.25;
 /// about twice the radius.
 pub const DEFAULT_SETBACK_FACTOR: f64 = 1.5;
 
-/// Each round's ease into the curvature-continuous section before a G2 corner's setback, where
-/// the setback is given or the corner is one the ellipsoid cannot read (else the ellipsoid's
-/// ease, [`SETBACK_SCALE`]): this times its radius along each edge (SMLib's
-/// `smlib_blend_setback_open_eased`), a quarter of the round's width. The ease makes the hole's
-/// conditions agree at its corners: the section meets each planar face with no curvature
-/// across, and the face's curve leaves the contact line without turning, so the patches can be
-/// G2 to the rounds and the faces all the way to the corners. A round keeps its own section up
-/// to where its ease starts, `setback + ease` from the vertex.
-pub const EASE_FACTOR: f64 = 0.25;
+/// Each round's ease into the curvature-continuous section before a G2 corner's setback: this
+/// times its radius along each edge, at every G2 corner (SMLib's `smlib_blend_setback_open_eased`).
+/// The ease makes the hole's conditions agree at its corners: the section meets each planar face
+/// with no curvature across, and the face's curve leaves the contact line without turning, so the
+/// patches can be G2 to the rounds and the faces all the way to the corners. Over the ease the
+/// section's middle moves towards the edge by 0.075 r (from the circle's 0.414 r to the quintic's
+/// 0.339 r, along the bisector at a square edge), on the ease law's steepest slope 1.875 / length:
+/// the surface's normal turns along the edge by `atan(0.141 / EASE_FACTOR)` there, about 10° at
+/// 0.8 (30° at a quarter of the radius, a dark streak where each round meets the corner). A round
+/// keeps its own section up to where its ease starts, `setback + ease` from the vertex.
+pub const EASE_FACTOR: f64 = 0.8;
+
+/// The rounds' ease before a G2 corner's setback, rounds of `radius` ([`EASE_FACTOR`]).
+pub fn ease(radius: f64) -> f64 {
+    EASE_FACTOR * radius
+}
 
 /// How far (this share of the corner's round's curvature 1 / r, the jump a rolling ball makes)
 /// the hole's own data may be from the curvatures the patches' construction asks of it: a
