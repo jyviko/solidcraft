@@ -1862,7 +1862,7 @@ pub enum FilletCorner {
     /// A piece of the rolling ball's sphere: tangent (G1) to each blend.
     #[default]
     Rolling,
-    /// The corner set back (its distance from the fillet's `setbacks`, else 1.5 × the radius)
+    /// The corner set back (its distance from the fillet's `setbacks`, else by its ellipsoid: `solidcraft_kernel::fillet_g2_corner_setback`)
     /// and filled with a patch meeting the rounds and the faces round it to the second order
     /// (`solidcraft_kernel::fillet_g2_corners`).
     G2,

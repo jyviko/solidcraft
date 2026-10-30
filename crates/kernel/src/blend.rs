@@ -444,8 +444,8 @@ fn corner_ellipsoid_setback(faces: &Faces, vertex: u32, radius: f64) -> Result<O
 
 /// [`fillet`] whose corners where three or more rounded edges meet are G2 patches
 /// ([`crate::corner_g2`]): each such corner is set back, `setbacks` naming a corner by a point at
-/// its vertex and the distance its patch starts along each edge there (the others take
-/// [`crate::DEFAULT_SETBACK_FACTOR`] times the radius), SMLib leaves it open, and a patch that
+/// its vertex and the distance its patch starts along each edge there (the others take the
+/// setback and ease of their ellipsoid, [`fillet_g2_corner_setback`]), SMLib leaves it open, and a patch that
 /// meets the rounds and the faces round it to the second order fills it. The faces are sewn
 /// into one solid, convex corners and concave ones alike. Without such a corner this is
 /// [`fillet`]. Refused: a corner where an edge is not rounded, or whose edges are not all of one
