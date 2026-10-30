@@ -230,7 +230,8 @@ pub(crate) fn quad_patch(body: &Body, chain: &[(usize, bool)], curvature_tol: f6
     let mut mobius = Vec::with_capacity(n);
     let mut beside = Vec::with_capacity(n);
     for &(e, forward) in &order {
-        let (edge, c) = quad_edge(&record, e, forward)?;
+        let (mut edge, c) = quad_edge(&record, e, forward)?;
+        edge.plane = face_plane(&record, e)?;
         edges.push(edge);
         mobius.push(c);
         beside.push(Beside::new(&record, e, forward, Continuity::G2, size)?);
@@ -251,6 +252,23 @@ pub(crate) fn quad_patch(body: &Body, chain: &[(usize, bool)], curvature_tol: f6
     let fill = solidcraft_geom::fill_quad::quad_fill(&edges, &mut frames, &spec).map_err(spline_error)?;
     let made = quad_body(body, &record, &order, &mobius, &fill, face_tolerance(body))?;
     Ok((made, fill))
+}
+
+/// The plane `n·p = c` (unit `n`) of the one face beside record edge `e`, when it is planar.
+fn face_plane(record: &b::Brep, e: usize) -> Result<Option<(Vec3, f64)>> {
+    let edge = record.edges.get(e).ok_or_else(|| KernelError::Failed("patch: edge reference".into()))?;
+    let [u] = edge.uses.as_slice() else { return Ok(None) };
+    let face = record.faces.get(u.face as usize).ok_or_else(|| KernelError::Failed("patch: face reference".into()))?;
+    let (origin, a, b) = match face.parameters() {
+        b::Surface::Plane { origin, u_axis, v_axis } => (Vec3::from(*origin), Vec3::from(*u_axis), Vec3::from(*v_axis)),
+        b::Surface::PlaneThrough { origin, u_point, v_point } => {
+            let o = Vec3::from(*origin);
+            (o, Vec3::from(*u_point) - o, Vec3::from(*v_point) - o)
+        }
+        _ => return Ok(None),
+    };
+    let n = a.cross(b).normalized().ok_or_else(|| KernelError::Invalid(format!("the plane beside edge {e} has no normal")))?;
+    Ok(Some((n, n.dot(origin))))
 }
 
 /// A hole edge as the four-sided fill takes it: the piece of its curve on its interval, on
@@ -304,7 +322,7 @@ fn quad_edge(record: &b::Brep, e: usize, forward: bool) -> Result<(QuadEdge, f64
     let w: Vec<f64> = h.iter().map(|x| x.w).collect();
     let (Some(&w0), Some(&wp)) = (w.first(), w.last()) else { return Err(KernelError::Failed("patch: an empty edge".into())) };
     if w.iter().all(|x| (x - w0).abs() <= 1e-14 * w0.abs()) {
-        return Ok((QuadEdge { degree: p, knots: unit, points, weights: Vec::new() }, 1.0));
+        return Ok((QuadEdge { degree: p, knots: unit, points, weights: Vec::new(), plane: None }, 1.0));
     }
     if count != p + 1 || !(w0 > 0.0 && wp > 0.0) {
         return Err(KernelError::Invalid(format!("not supported yet: a G2 corner on edge {e}, a rational curve of more than one piece")));
@@ -312,7 +330,7 @@ fn quad_edge(record: &b::Brep, e: usize, forward: bool) -> Result<(QuadEdge, f64
     // w'ᵢ = wᵢ·c^(p−i) / w_p, with c^p = w_p / w₀: both ends one.
     let c = (wp / w0).powf(1.0 / p as f64);
     let weights: Vec<f64> = w.iter().enumerate().map(|(i, x)| x * c.powi((p - i) as i32) / wp).collect();
-    Ok((QuadEdge { degree: p, knots: unit, points, weights }, c))
+    Ok((QuadEdge { degree: p, knots: unit, points, weights, plane: None }, c))
 }
 
 /// The sheet of the four-sided fill's patches on the hole `order` (edge 0 starting at a corner),

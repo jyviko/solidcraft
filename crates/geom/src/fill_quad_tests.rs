@@ -14,8 +14,8 @@ fn a_flat_hexagon_fills_flat() {
     for k in 0..6 {
         let (a, b) = (corners[k], corners[(k + 1) % 6]);
         let m = (a + b) * 0.5;
-        edges.push(QuadEdge { degree: 1, knots: vec![0.0, 0.0, 1.0, 1.0], points: vec![a, m], weights: Vec::new() });
-        edges.push(QuadEdge { degree: 1, knots: vec![0.0, 0.0, 1.0, 1.0], points: vec![m, b], weights: Vec::new() });
+        edges.push(QuadEdge { degree: 1, knots: vec![0.0, 0.0, 1.0, 1.0], points: vec![a, m], weights: Vec::new(), plane: None });
+        edges.push(QuadEdge { degree: 1, knots: vec![0.0, 0.0, 1.0, 1.0], points: vec![m, b], weights: Vec::new(), plane: None });
     }
     let copy = edges.clone();
     let mut frames = |j: usize, ts: &[f64]| -> Result<Vec<Frame>, String> {
@@ -42,7 +42,7 @@ fn a_flat_hexagon_fills_flat() {
 /// not in standard form.
 #[test]
 fn a_bad_hole_is_refused() {
-    let line = |a: Vec3, b: Vec3| QuadEdge { degree: 1, knots: vec![0.0, 0.0, 1.0, 1.0], points: vec![a, b], weights: Vec::new() };
+    let line = |a: Vec3, b: Vec3| QuadEdge { degree: 1, knots: vec![0.0, 0.0, 1.0, 1.0], points: vec![a, b], weights: Vec::new(), plane: None };
     let mut frames = |_: usize, ts: &[f64]| -> Result<Vec<Frame>, String> {
         Ok(ts.iter().map(|_| Frame { normal: Vec3::new(0.0, 0.0, 1.0), leave: Vec3::new(1.0, 0.0, 0.0), form: [0.0; 3] }).collect())
     };
@@ -74,7 +74,13 @@ fn a_spherical_cap_fills_g2() {
         .map(|k| {
             let (a0, a1) = (k as f64 * step, (k + 1) as f64 * step);
             let mid = Vec3::new(rho * (a0 + half).cos(), rho * (a0 + half).sin(), 0.0) * (1.0 / w);
-            QuadEdge { degree: 2, knots: vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0], points: vec![at(a0), mid, at(a1)], weights: vec![1.0, w, 1.0] }
+            QuadEdge {
+                degree: 2,
+                knots: vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+                points: vec![at(a0), mid, at(a1)],
+                weights: vec![1.0, w, 1.0],
+                plane: None,
+            }
         })
         .collect();
     let copy = edges.clone();
@@ -119,7 +125,7 @@ fn a_paraboloid_hexagon_fills_g2() {
         let m = (0.5 * (a.0 + b.0), 0.5 * (a.1 + b.1));
         let (pa, pb, pm) = (lift(a.0, a.1), lift(b.0, b.1), lift(m.0, m.1));
         let mid = pm * 2.0 - (pa + pb) * 0.5;
-        QuadEdge { degree: 2, knots: vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0], points: vec![pa, mid, pb], weights: Vec::new() }
+        QuadEdge { degree: 2, knots: vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0], points: vec![pa, mid, pb], weights: Vec::new(), plane: None }
     };
     let mut edges = Vec::new();
     for k in 0..6 {
@@ -160,13 +166,19 @@ fn a_cylinder_window_fills_g2() {
     let r = 5.0f64;
     let at = |x: f64, a: f64| Vec3::new(x, r * a.cos(), r * a.sin());
     let (a0, a1) = (30f64.to_radians(), 90f64.to_radians());
-    let line = |p: Vec3, q: Vec3| QuadEdge { degree: 1, knots: vec![0.0, 0.0, 1.0, 1.0], points: vec![p, q], weights: Vec::new() };
+    let line = |p: Vec3, q: Vec3| QuadEdge { degree: 1, knots: vec![0.0, 0.0, 1.0, 1.0], points: vec![p, q], weights: Vec::new(), plane: None };
     let arc = |x: f64, from: f64, to: f64| {
         let half = 0.5 * (to - from);
         let w = half.cos();
         let mid = at(x, from + half) * (1.0 / w);
         let mid = Vec3::new(x, mid.y, mid.z);
-        QuadEdge { degree: 2, knots: vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0], points: vec![at(x, from), mid, at(x, to)], weights: vec![1.0, w, 1.0] }
+        QuadEdge {
+            degree: 2,
+            knots: vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+            points: vec![at(x, from), mid, at(x, to)],
+            weights: vec![1.0, w, 1.0],
+            plane: None,
+        }
     };
     let am = 0.5 * (a0 + a1);
     let edges = vec![
@@ -214,13 +226,19 @@ fn a_cylinder_window_beside_a_tangent_plane_fills_g2() {
     let r = 5.0f64;
     let at = |x: f64, a: f64| Vec3::new(x, r * a.cos(), r * a.sin());
     let (a0, a1) = (30f64.to_radians(), 90f64.to_radians());
-    let line = |p: Vec3, q: Vec3| QuadEdge { degree: 1, knots: vec![0.0, 0.0, 1.0, 1.0], points: vec![p, q], weights: Vec::new() };
+    let line = |p: Vec3, q: Vec3| QuadEdge { degree: 1, knots: vec![0.0, 0.0, 1.0, 1.0], points: vec![p, q], weights: Vec::new(), plane: None };
     let arc = |x: f64, from: f64, to: f64| {
         let half = 0.5 * (to - from);
         let w = half.cos();
         let mid = at(x, from + half) * (1.0 / w);
         let mid = Vec3::new(x, mid.y, mid.z);
-        QuadEdge { degree: 2, knots: vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0], points: vec![at(x, from), mid, at(x, to)], weights: vec![1.0, w, 1.0] }
+        QuadEdge {
+            degree: 2,
+            knots: vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+            points: vec![at(x, from), mid, at(x, to)],
+            weights: vec![1.0, w, 1.0],
+            plane: None,
+        }
     };
     let am = 0.5 * (a0 + a1);
     let edges = vec![
@@ -269,13 +287,19 @@ fn a_mirrored_cylinder_window_fills_g2() {
     let r = 5.0f64;
     let at = |x: f64, a: f64| Vec3::new(x, r * a.cos(), -r * a.sin());
     let (a0, a1) = (30f64.to_radians(), 90f64.to_radians());
-    let line = |p: Vec3, q: Vec3| QuadEdge { degree: 1, knots: vec![0.0, 0.0, 1.0, 1.0], points: vec![p, q], weights: Vec::new() };
+    let line = |p: Vec3, q: Vec3| QuadEdge { degree: 1, knots: vec![0.0, 0.0, 1.0, 1.0], points: vec![p, q], weights: Vec::new(), plane: None };
     let arc = |x: f64, from: f64, to: f64| {
         let half = 0.5 * (to - from);
         let w = half.cos();
         let mid = at(x, from + half) * (1.0 / w);
         let mid = Vec3::new(x, mid.y, mid.z);
-        QuadEdge { degree: 2, knots: vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0], points: vec![at(x, from), mid, at(x, to)], weights: vec![1.0, w, 1.0] }
+        QuadEdge {
+            degree: 2,
+            knots: vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+            points: vec![at(x, from), mid, at(x, to)],
+            weights: vec![1.0, w, 1.0],
+            plane: None,
+        }
     };
     let am = 0.5 * (a0 + a1);
     let edges = vec![

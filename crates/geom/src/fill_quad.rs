@@ -111,6 +111,10 @@ pub struct QuadEdge {
     pub knots: Vec<f64>,
     pub points: Vec<Vec3>,
     pub weights: Vec<f64>,
+    /// The plane `n·p = c` of the face beside the edge, `(n, c)` with `n` a unit normal, when
+    /// that face is planar: the patch's second row of control points beside the edge is held in
+    /// it exactly, so the patch is tangent to the plane all along the edge ([`quad_fill`]).
+    pub plane: Option<(Vec3, f64)>,
 }
 
 /// What the face beside an edge is at a point of it.
@@ -285,6 +289,7 @@ struct Curve {
     space: Space,
     h: Vec<Vec3>,
     w: Vec<f64>,
+    plane: Option<(Vec3, f64)>,
 }
 
 impl Curve {
@@ -305,7 +310,14 @@ impl Curve {
             return invalid("a rational hole edge must be in standard form (end weights one)");
         }
         let h = e.points.iter().zip(&w).map(|(p, x)| *p * *x).collect();
-        Ok(Curve { space, h, w })
+        let plane = match e.plane {
+            None => None,
+            Some((n, c)) => {
+                let n1 = n.normalized().filter(|_| c.is_finite()).ok_or_else(|| SplineError::Invalid("a hole edge's plane has no normal".into()))?;
+                Some((n1, c / n.len()))
+            }
+        };
+        Ok(Curve { space, h, w, plane })
     }
 
     /// Run backwards (`t ↦ 1 − t`).
@@ -315,7 +327,7 @@ impl Curve {
         h.reverse();
         let mut w = self.w.clone();
         w.reverse();
-        Ok(Curve { space: Space::new(self.space.degree(), knots)?, h, w })
+        Ok(Curve { space: Space::new(self.space.degree(), knots)?, h, w, plane: self.plane })
     }
 
     /// The point and the first two derivatives at `t`.
@@ -541,6 +553,8 @@ struct Quilt {
     middles: Vec<Vec3>,
     /// The corners' fade length ([`QuadSpec::fade`]).
     fade: f64,
+    /// Each unknown's hard constraints, as the solve takes them ([`Map`]).
+    maps: Vec<Map>,
 }
 
 /// A station: where, and what is asked there.
@@ -580,6 +594,7 @@ impl Quilt {
         let patch_id = |k: usize, i: usize, j: usize| 1 + n * inner + k * inner * inner + (j - 1) * inner + (i - 1);
         let unknowns = 1 + n * inner + n * inner * inner;
         let mut patches = Vec::with_capacity(n);
+        let mut held: Vec<(usize, Vec3, f64)> = Vec::new();
         for k in 0..n {
             let row = curves.get(2 * k).ok_or_else(|| SplineError::Invalid("edge".into()))?.clone();
             let col = curves.get((2 * k + m - 1) % m).ok_or_else(|| SplineError::Invalid("edge".into()))?.reversed()?;
@@ -660,9 +675,23 @@ impl Quilt {
                     }
                 }
             }
+            // A planar face beside the patch's bottom edge (v = 0) or its left edge (u = 0): the
+            // second row (column) of control points in its plane.
+            let coef = Coefficients { eu: &eu_all, ev: &ev_all, fu: &fu, gu: &gu_, fv: &fv, gv: &gv_ };
+            if row.plane.is_some() && col.plane.is_some() {
+                return Err(SplineError::Unsupported("a hole corner between two planar faces".into()));
+            }
+            if let Some(plane) = row.plane {
+                held.extend(hold_in_plane(&coef, &dof, c, cu, cv, true, plane, &mut h0, &w)?);
+            }
+            if let Some(plane) = col.plane {
+                held.extend(hold_in_plane(&coef, &dof, c, cu, cv, false, plane, &mut h0, &w)?);
+            }
             patches.push(Patch { uspace, vspace, h0, w, dof, fu, gu: gu_, fv, gv: gv_ });
         }
-        Ok(Quilt { n, sp, patches, unknowns, curves: curves.to_vec(), centre0, middles, fade })
+        let size = curves.iter().flat_map(|c| c.h.iter().zip(&c.w).map(|(h, w)| *h * (1.0 / *w))).fold(0.0f64, |m, p| m.max(p.len())).max(1.0);
+        let maps = maps_of(unknowns, &held, size)?;
+        Ok(Quilt { n, sp, patches, unknowns, curves: curves.to_vec(), centre0, middles, fade, maps })
     }
 
     /// Patch `k`'s jet at `(u, v)`.
@@ -820,7 +849,7 @@ impl Quilt {
 
     /// Solve the rounds: freeze the frames at the last solution (the fixed nets at first), fit.
     fn solve(&self, stations: &[Station]) -> SplineResult<Vec<Vec3>> {
-        let mut x = vec![Vec3::ZERO; self.unknowns];
+        let mut x: Vec<Vec3> = self.maps.iter().map(|m| m.base).collect();
         let size = self.size();
         // Which unknowns share a row, once: their order for a narrow band.
         let jets: Vec<(Jet, Option<Jet>)> = stations
@@ -840,7 +869,7 @@ impl Quilt {
         }
         let order = pattern.ordering()?;
         // The energy does not change from round to round: assembled once.
-        let mut base = Normal::banded(&order, &self.patches)?;
+        let mut base = Normal::banded(&order, &self.maps)?;
         for k in 0..self.n {
             self.energy(k, &mut base, size)?;
         }
@@ -1143,6 +1172,203 @@ fn second_form(s: &[Vec3; 6], normal: Vec3, dir: Vec3) -> f64 {
 /// row (`Pattern`), then, in the order that pattern gives (reverse Cuthill–McKee, so the
 /// matrix is a narrow band: E. Cuthill and J. McKee, 1969; A. George, 1971), the banded matrix
 /// itself, solved by banded Cholesky.
+/// An unknown point as the solve takes it: `X = base + Σ z_a basis[a]` over the coordinates not
+/// `held` (orthonormal `basis`); a held coordinate is fixed by a hard constraint (its plane's).
+#[derive(Clone, Copy, Debug)]
+struct Map {
+    basis: [Vec3; 3],
+    base: Vec3,
+    held: [bool; 3],
+}
+
+impl Map {
+    const FREE: Map =
+        Map { basis: [Vec3::new(1.0, 0.0, 0.0), Vec3::new(0.0, 1.0, 0.0), Vec3::new(0.0, 0.0, 1.0)], base: Vec3::ZERO, held: [false; 3] };
+}
+
+/// How the unknowns of `Sp ⊗ Sp` enter a patch's homogeneous net (as [`Quilt::jet`] reads
+/// them): the coefficient of unknown `(a, b)` at net point `(i, j)` is
+/// `eu[a][i] ev[b][j] + fu[a][i] fv[b][j] + gu[a][i] gv[b][j]`.
+struct Coefficients<'a> {
+    eu: &'a [Vec<f64>],
+    ev: &'a [Vec<f64>],
+    fu: &'a [Vec<f64>],
+    gu: &'a [Vec<f64>],
+    fv: &'a [Vec<f64>],
+    gv: &'a [Vec<f64>],
+}
+
+impl Coefficients<'_> {
+    fn at(&self, a: usize, b: usize, i: usize, j: usize) -> f64 {
+        let g = |x: &[Vec<f64>], k: usize, l: usize| x.get(k).and_then(|r| r.get(l)).copied().unwrap_or(0.0);
+        g(self.eu, a, i) * g(self.ev, b, j) + g(self.fu, a, i) * g(self.fv, b, j) + g(self.gu, a, i) * g(self.gv, b, j)
+    }
+}
+
+/// The hard constraint that holds a patch's second row of control points (`along_u`: the row
+/// `j = 1` beside its bottom edge; otherwise the column `i = 1` beside its left edge) in the
+/// edge's face's plane `n·p = c`, so that the patch is tangent to the plane along the whole edge:
+/// with the edge's own row in the plane, `S` and its derivative across lie in it exactly (for a
+/// rational net too: `n·(F_ν W − F W_ν) = c W_ν W − c W W_ν`). Each point of that row is
+/// `(h0 + Σ coef·d) / w`; its height `n·(h0 + Σ coef·d) − c w` must vanish, which fixes the
+/// unknowns' components along `n`, `y`, from `G y = r` (`r` the fixed net's heights).
+///
+/// The row's end on the spoke (the side's middle) holds the spoke's own unknown alone, and fixes
+/// it (the spoke's tangent there in the plane: a geometric condition, the same from both patches
+/// beside the spoke). The row's end on the other edge is that edge's second control point, in the
+/// plane already (that edge leaves the corner tangent to the plane). The row's inside points are
+/// the fixed net's own: what of their heights the unknowns cannot follow (a least-squares fit of
+/// `y` to them) is taken off the fixed net, so that `G y = r` holds exactly. Returns the unknowns'
+/// constraints `(id, n, y)`.
+#[allow(clippy::too_many_arguments)]
+fn hold_in_plane(
+    coef: &Coefficients,
+    dof: &[Option<usize>],
+    c: usize,
+    cu: usize,
+    cv: usize,
+    along_u: bool,
+    (normal, offset): (Vec3, f64),
+    h0: &mut [Vec3],
+    w: &[f64],
+) -> SplineResult<Vec<(usize, Vec3, f64)>> {
+    // Along the row: patch net index `t` (0 ..= last), unknown index `a` (1 .. c).
+    let last = if along_u { cu } else { cv }.checked_sub(1).ok_or_else(|| SplineError::Invalid("a patch with no net".into()))?;
+    let net = |t: usize| if along_u { t + cu } else { t * cu + 1 };
+    let g = |a: usize, t: usize| if along_u { coef.at(a, 1, t, 1) } else { coef.at(1, a, 1, t) };
+    let id = |a: usize| if along_u { dof.get(a + c) } else { dof.get(1 + c * a) }.copied().flatten();
+    let height = |h0: &[Vec3], t: usize| -> f64 {
+        let (Some(h), Some(x)) = (h0.get(net(t)), w.get(net(t))) else { return f64::NAN };
+        normal.dot(*h) - offset * x
+    };
+    let ids: Vec<usize> = (1..c).map(|a| id(a).ok_or_else(|| SplineError::Invalid("a held row's unknown".into()))).collect::<SplineResult<_>>()?;
+    // The far end, on the spoke: the spoke's unknown alone.
+    let spoke = c - 1;
+    let gs = g(spoke, last);
+    if !(gs.abs() > 1e-12) || (1..spoke).any(|a| g(a, last).abs() > 1e-12 * gs.abs()) {
+        return invalid("a held row's end on the spoke is not the spoke's own");
+    }
+    let y_spoke = -height(h0, last) / gs;
+    // The near end, the other edge's second control point: in the plane already.
+    let scale = (0..=last).filter_map(|t| h0.get(net(t)).map(|h| h.len())).fold(1.0f64, f64::max);
+    let near = height(h0, 0);
+    if !(near.abs() <= 1e-9 * scale) {
+        return Err(SplineError::Unsupported(format!(
+            "a G2 corner whose edge leaves a planar face's corner {near:e} out of its plane (it must leave tangent to it)"
+        )));
+    }
+    // The inside: y_1 .. y_{c-2} by least squares on the rows 1 .. last − 1.
+    let k = spoke.saturating_sub(1);
+    let mut ata = vec![0.0; k * k];
+    let mut atb = vec![0.0; k];
+    for t in 1..last {
+        let rhs = -height(h0, t) - g(spoke, t) * y_spoke;
+        for a in 0..k {
+            let ga = g(a + 1, t);
+            if let Some(slot) = atb.get_mut(a) {
+                *slot += ga * rhs;
+            }
+            for b in 0..k {
+                if let Some(slot) = ata.get_mut(a * k + b) {
+                    *slot += ga * g(b + 1, t);
+                }
+            }
+        }
+    }
+    let mut y = dense_solve(ata, atb, k)?;
+    y.push(y_spoke);
+    // Take off the fixed net what the unknowns do not follow.
+    for t in 1..last {
+        let follow: f64 = (1..c).map(|a| g(a, t) * y.get(a - 1).copied().unwrap_or(0.0)).sum();
+        let rest = height(h0, t) + follow;
+        if let Some(h) = h0.get_mut(net(t)) {
+            *h -= normal * rest;
+        }
+    }
+    if !y.iter().all(|v| v.is_finite()) {
+        return invalid("a held row's heights are not finite");
+    }
+    Ok(ids.into_iter().zip(y).map(|(i, v)| (i, normal, v)).collect())
+}
+
+/// Solve the dense symmetric positive definite `k × k` system `a x = b` (Cholesky).
+fn dense_solve(mut a: Vec<f64>, mut b: Vec<f64>, k: usize) -> SplineResult<Vec<f64>> {
+    if a.len() != k * k || b.len() != k {
+        return invalid("a dense system's size");
+    }
+    let at = |a: &[f64], i: usize, j: usize| a.get(i * k + j).copied().unwrap_or(0.0);
+    for j in 0..k {
+        let mut d = at(&a, j, j);
+        for p in 0..j {
+            d -= at(&a, j, p) * at(&a, j, p);
+        }
+        if !(d > 0.0) {
+            return invalid("a held row's fit is singular");
+        }
+        let d = d.sqrt();
+        if let Some(slot) = a.get_mut(j * k + j) {
+            *slot = d;
+        }
+        for i in j + 1..k {
+            let mut s = at(&a, i, j);
+            for p in 0..j {
+                s -= at(&a, i, p) * at(&a, j, p);
+            }
+            if let Some(slot) = a.get_mut(i * k + j) {
+                *slot = s / d;
+            }
+        }
+    }
+    for i in 0..k {
+        let mut s = b.get(i).copied().unwrap_or(0.0);
+        for p in 0..i {
+            s -= at(&a, i, p) * b.get(p).copied().unwrap_or(0.0);
+        }
+        if let Some(slot) = b.get_mut(i) {
+            *slot = s / at(&a, i, i);
+        }
+    }
+    for i in (0..k).rev() {
+        let mut s = b.get(i).copied().unwrap_or(0.0);
+        for p in i + 1..k {
+            s -= at(&a, p, i) * b.get(p).copied().unwrap_or(0.0);
+        }
+        if let Some(slot) = b.get_mut(i) {
+            *slot = s / at(&a, i, i);
+        }
+    }
+    Ok(b)
+}
+
+/// Each unknown's [`Map`] from its constraints `(id, n, y)` (`n·X = y`): free where it has
+/// none; with one plane (or the same plane twice, from the two patches beside a spoke, which
+/// must agree to `1e-9` of the hole's size) its component along `n` held; two planes are a
+/// corner between two planar faces, refused before this.
+fn maps_of(unknowns: usize, held: &[(usize, Vec3, f64)], size: f64) -> SplineResult<Vec<Map>> {
+    let mut maps = vec![Map::FREE; unknowns];
+    let mut set: Vec<Option<(Vec3, f64)>> = vec![None; unknowns];
+    for &(id, n, y) in held {
+        let Some(slot) = set.get_mut(id) else { return invalid("a held unknown") };
+        match slot {
+            None => *slot = Some((n, y)),
+            Some((m, z)) => {
+                let same = n.dot(*m);
+                if !((same.abs() - 1.0).abs() <= 1e-12 && (y * same.signum() - *z).abs() <= 1e-9 * size) {
+                    return Err(SplineError::Unsupported(format!("an unknown held in two planes ({y:e} and {z:e} along them)")));
+                }
+            }
+        }
+    }
+    for (map, s) in maps.iter_mut().zip(&set) {
+        let Some((n, y)) = s else { continue };
+        let pick = if n.x.abs() < 0.9 { Vec3::new(1.0, 0.0, 0.0) } else { Vec3::new(0.0, 1.0, 0.0) };
+        let e1 = n.cross(pick).normalized().ok_or_else(|| SplineError::Invalid("a plane's normal".into()))?;
+        let e2 = n.cross(e1);
+        *map = Map { basis: [e1, e2, *n], base: *n * *y, held: [false, false, true] };
+    }
+    Ok(maps)
+}
+
 #[derive(Clone)]
 enum Store {
     Pattern(Vec<Vec<usize>>),
@@ -1154,6 +1380,7 @@ struct Normal {
     points: usize,
     store: Store,
     b: Vec<f64>,
+    maps: Vec<Map>,
 }
 
 /// An ordering of the unknown points and the band it gives (in points).
@@ -1167,17 +1394,31 @@ impl Normal {
         if points > MAX_UNKNOWN_POINTS {
             return Err(SplineError::TooLarge(format!("{points} unknown points (at most {MAX_UNKNOWN_POINTS})")));
         }
-        Ok(Normal { points, store: Store::Pattern(vec![Vec::new(); points]), b: Vec::new() })
+        Ok(Normal { points, store: Store::Pattern(vec![Vec::new(); points]), b: Vec::new(), maps: Vec::new() })
     }
 
-    fn banded(order: &Ordering, _patches: &[Patch]) -> SplineResult<Normal> {
+    /// The banded system in `order`, each unknown point in the coordinates of its [`Map`]: a
+    /// held coordinate is no unknown (its row and column are the identity, its value zero).
+    fn banded(order: &Ordering, maps: &[Map]) -> SplineResult<Normal> {
         let points = order.pos.len();
         let n = 3 * points;
         let bw = 3 * order.width + 2;
         if n.saturating_mul(bw + 1) > 400_000_000 {
             return Err(SplineError::TooLarge(format!("a band of {bw} over {n} unknowns")));
         }
-        Ok(Normal { points, store: Store::Band { band: Band::new(n, bw), pos: order.pos.clone() }, b: vec![0.0; n] })
+        if maps.len() != points {
+            return invalid("an unknown without its map");
+        }
+        let mut band = Band::new(n, bw);
+        for (m, map) in maps.iter().enumerate() {
+            let Some(&pm) = order.pos.get(m) else { continue };
+            for (a, held) in map.held.iter().enumerate() {
+                if *held {
+                    band.add(3 * pm + a, 3 * pm + a, 1.0);
+                }
+            }
+        }
+        Ok(Normal { points, store: Store::Band { band, pos: order.pos.clone() }, b: vec![0.0; n], maps: maps.to_vec() })
     }
 
     /// The reverse Cuthill–McKee order of the pattern's points (each component from a point of
@@ -1243,16 +1484,25 @@ impl Normal {
                 }
             }
             Store::Band { band, pos } => {
+                // In each point's map: X = base + Σ z_a e_a over its free coordinates.
+                let maps = &self.maps;
+                let mut r = r;
+                let mut mapped: Vec<(usize, [f64; 3])> = Vec::with_capacity(terms.len());
                 for &(m, cm) in terms {
+                    let Some(map) = maps.get(m) else { continue };
+                    r -= cm.dot(map.base);
+                    mapped.push((m, std::array::from_fn(|a| if map.held[a] { 0.0 } else { cm.dot(map.basis[a]) })));
+                }
+                for &(m, cm) in &mapped {
                     let Some(&pm) = pos.get(m) else { continue };
-                    for (a, da) in [cm.x, cm.y, cm.z].iter().enumerate() {
+                    for (a, da) in cm.iter().enumerate() {
                         let row = 3 * pm + a;
                         if let Some(slot) = self.b.get_mut(row) {
                             *slot += w2 * da * r;
                         }
-                        for &(k, ck) in terms {
+                        for &(k, ck) in &mapped {
                             let Some(&pk) = pos.get(k) else { continue };
-                            for (b, db) in [ck.x, ck.y, ck.z].iter().enumerate() {
+                            for (b, db) in ck.iter().enumerate() {
                                 let col = 3 * pk + b;
                                 if row <= col {
                                     band.add(row, col, w2 * da * db);
@@ -1310,7 +1560,11 @@ impl Normal {
         let Store::Band { band, pos } = self.store else { return invalid("no matrix") };
         let x = band.solve_fast(self.b)?;
         let at = |i: usize| x.get(i).copied().unwrap_or(0.0);
-        Ok(pos.iter().map(|p| Vec3::new(at(3 * p), at(3 * p + 1), at(3 * p + 2))).collect())
+        Ok(pos
+            .iter()
+            .zip(&self.maps)
+            .map(|(p, map)| (0..3).filter(|a| !map.held[*a]).fold(map.base, |acc, a| acc + map.basis[a] * at(3 * p + a)))
+            .collect())
     }
 }
 
