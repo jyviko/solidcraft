@@ -54,14 +54,14 @@ fn smlib_validity(body: &Body) -> Option<SmlibCheck> {
     })
 }
 
-/// Whether this build links SMLib (the `smlib` feature).
-pub fn smlib_built() -> bool {
-    cfg!(feature = "smlib")
+/// The backend this build runs on: `"smlib"` or `"solidcore"` (the kernel's feature).
+pub fn backend_name() -> &'static str {
+    if cfg!(feature = "smlib") { "smlib" } else { "solidcore" }
 }
 
 /// Where every SMLib call that fails from now on leaves its inputs for replay (the C API's
 /// `smlib_set_dump_dir`: the call's arguments and B-reps, which `smlib_brep_read` reads back);
-/// `None` stops it. The solidcore backend has no dumps: it refuses a folder.
+/// `None` stops it. The solidcore backend writes no dumps.
 pub fn smlib_dump_dir(dir: Option<&std::path::Path>) -> crate::Result<()> {
     crate::backend::set_dump_dir(dir).map_err(|e| crate::KernelError::Failed(format!("SMLib dump folder: {e}")))
 }

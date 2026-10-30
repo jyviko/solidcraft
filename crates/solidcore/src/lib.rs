@@ -194,13 +194,12 @@ pub fn init() -> Result<()> {
     Ok(())
 }
 
-/// Where failing calls leave their inputs for replay: a feature of SMLib's C API that has no
-/// counterpart here. `None` (off) is accepted; a folder is refused.
+/// Where failing calls leave their inputs for replay: SMLib's C API writes them (`smlib_set_dump_dir`).
+/// solidcore keeps no such replay files, so a folder is taken and nothing is written to it: no
+/// answer depends on it.
 pub fn set_dump_dir(dir: Option<&Path>) -> Result<()> {
-    match dir {
-        None => Ok(()),
-        Some(_) => refused(),
-    }
+    let _ = dir;
+    Ok(())
 }
 
 /// The call running right now, for crash reports: solidcore keeps no such record (calls are

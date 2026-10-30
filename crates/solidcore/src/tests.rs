@@ -64,5 +64,5 @@ fn unported_calls_are_refused() {
     assert!(ssi::Surface::plane([0.0; 3], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 1.0], [0.0, 1.0]).is_err());
     assert!(Error::NotBuilt.to_string().starts_with("not supported yet"));
     assert_eq!(set_dump_dir(None), Ok(()));
-    assert_eq!(set_dump_dir(Some(Path::new("/nowhere"))), Err(Error::NotBuilt));
+    assert_eq!(set_dump_dir(Some(Path::new("/nowhere"))), Ok(()));
 }

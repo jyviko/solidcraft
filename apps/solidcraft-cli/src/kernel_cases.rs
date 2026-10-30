@@ -9,9 +9,9 @@ use serde_json::{Value, json};
 use crate::oracle::{ABS_FRAC, Checks, REL_TOL, totals, v3};
 use crate::{read_json, recipe};
 
-/// The kernel the cases run on: SMLib, the only one.
+/// The kernel backend the cases run on (`smlib` or `solidcore`).
 fn kernel() -> String {
-    "smlib".into()
+    solidcraft_engine::kernel::backend_name().into()
 }
 
 /// How many cases a chain of `base` recipes may go through (a ladder case builds on the one
@@ -668,11 +668,6 @@ fn check_case(dir: &str, dumps: Option<&std::path::Path>) -> Value {
             return out;
         }
     };
-    if !solidcraft_engine::kernel::smlib_built() {
-        out["status"] = json!("unsupported");
-        out["error"] = json!("this build has no SMLib: build solidcraft-cli with --features smlib");
-        return out;
-    }
     // `refused`: only a clean refusal is right; `solid_or_refused`: a clean refusal, or a result
     // graded as usual (where the geometry has no manifold answer, such as bodies touching along a
     // curve only).
