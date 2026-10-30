@@ -299,6 +299,8 @@ struct CornerFrame {
     away: Vec<Vec3>,
     rail: Vec<f64>,
     faces: Vec<CornerFace>,
+    /// Each edge: its record index, its length and the vertex at its other end.
+    edges: Vec<(usize, f64, u32)>,
 }
 
 /// A face at a [`CornerFrame`]'s vertex, between its edges `i` and `j`.
@@ -328,6 +330,7 @@ fn corner_frame(faces: &Faces, vertex: u32, radius: f64) -> Option<CornerFrame> 
     }
     let mut away = Vec::with_capacity(at.len());
     let mut rail = Vec::with_capacity(at.len());
+    let mut edges = Vec::with_capacity(at.len());
     for e in &at {
         let [a, b] = faces.rec.edges.get(*e)?.vertices;
         if a == b || !faces.straight(*e) {
@@ -335,6 +338,7 @@ fn corner_frame(faces: &Faces, vertex: u32, radius: f64) -> Option<CornerFrame> 
         }
         let (pa, pb) = faces.ends(*e)?;
         away.push(if a == vertex { (pb - pa).normalized()? } else { (pa - pb).normalized()? });
+        edges.push((*e, pa.dist(pb), if a == vertex { b } else { a }));
         let [f, g]: [u32; 2] = faces.faces_of(*e).into_iter().collect::<Vec<_>>().try_into().ok()?;
         let cos = faces.plane_normal(f as usize)?.dot(faces.plane_normal(g as usize)?).clamp(-1.0, 1.0);
         rail.push(radius * (cos.acos() / 2.0).tan());
@@ -360,7 +364,7 @@ fn corner_frame(faces: &Faces, vertex: u32, radius: f64) -> Option<CornerFrame> 
             into_j: (u - w * cos).normalized()?,
         });
     }
-    Some(CornerFrame { away, rail, faces: corner_faces })
+    Some(CornerFrame { away, rail, faces: corner_faces, edges })
 }
 
 /// The least setback a corner of rounds of `radius` at `vertex` takes: a setback must reach past
@@ -376,15 +380,18 @@ fn setback_minimum(faces: &Faces, vertex: u32, radius: f64) -> Option<f64> {
     (least.is_finite() && least > 0.0).then_some(least)
 }
 
-/// A G2 corner's setback by the corner's ellipsoid ([`corner_ellipsoid_setback`]).
+/// A G2 corner's setback by the corner's ellipsoid ([`fillet_g2_corner_setback`]).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct CornerSetback {
     /// The ellipsoid's largest intercept on the corner's edges: the least setback the corner takes.
     pub least: f64,
-    /// [`crate::corner_g2::SETBACK_SCALE`] times `least`: the corner's default setback.
+    /// The scale of the ellipsoid the setback and ease come from: [`crate::corner_g2::SETBACK_SCALE`],
+    /// or less, down to 1, where the corner's setback and ease would not fit its edges.
+    pub scale: f64,
+    /// `scale` times `least`: the corner's default setback.
     pub setback: f64,
-    /// The rounds' ease before the default setback: the longest, over the rounds' contact lines,
-    /// from where the scaled ellipsoid crosses one to the setback.
+    /// The rounds' ease before the setback: the longest, over the rounds' contact lines, from
+    /// where the ellipsoid scaled by `scale` crosses one to the setback.
     pub ease: f64,
 }
 
@@ -396,50 +403,161 @@ pub struct CornerSetback {
 /// edges). Its intercept on each edge is the least setback there (`sqrt 2 r` at a box corner);
 /// the corner's setback is [`crate::corner_g2::SETBACK_SCALE`] times the largest (SMLib keeps one
 /// per corner), and the ease the longest stretch from where the ellipsoid so scaled crosses a
-/// round's contact line to the setback. `None` where no vertex is near `at` or at a corner
-/// [`corner_frame`] cannot read (a curved face or edge); refused where no ellipsoid fits (the
-/// fitted quadric not positive definite), naming the corner.
+/// round's contact line to the setback. Where the setback and its ease would not fit an edge of
+/// the corner (SMLib needs them shorter than every edge there), the scale shrinks towards 1 until
+/// they do ([`default_setbacks`], the corner alone: its edges' other ends not set back); refused
+/// where not even the bare intercept and its ease fit, naming the edge length that would. `None`
+/// where no vertex is near `at` or at a corner [`corner_frame`] cannot read (a curved face or
+/// edge); refused where no ellipsoid fits (the fitted quadric not positive definite), naming the
+/// corner.
 pub fn fillet_g2_corner_setback(body: &Body, at: Vec3, radius: f64) -> Result<Option<CornerSetback>> {
     body.require_brep("fillet")?;
     let faces = Faces::of(body)?;
     let Some(v) = corner_vertex(body, &faces, at) else { return Ok(None) };
-    corner_ellipsoid_setback(&faces, v, radius)
+    Ok(default_setbacks(&faces, &[(v, None)], radius)?.into_iter().next().flatten())
 }
 
-/// [`fillet_g2_corner_setback`] at `vertex`.
-fn corner_ellipsoid_setback(faces: &Faces, vertex: u32, radius: f64) -> Result<Option<CornerSetback>> {
-    use solidcraft_geom::ellipsoid::{CentredEllipsoid, Condition, EllipsoidError};
-    let Some(frame) = corner_frame(faces, vertex, radius) else { return Ok(None) };
-    let p = faces.point(vertex).unwrap_or(Vec3::ZERO);
-    let named = format!("({:.3}, {:.3}, {:.3})", p.x, p.y, p.z);
-    let conditions: Vec<Condition> =
-        frame.faces.iter().flat_map(|f| [Condition::On(f.crossing), Condition::Square { at: f.crossing, normal: f.normal }]).collect();
-    let ellipsoid = CentredEllipsoid::fit(&conditions).map_err(|e| match e {
-        EllipsoidError::NotPositiveDefinite => KernelError::Invalid(format!(
-            "the G2 corner at {named} takes no setback: no ellipsoid about it passes through the points where its rounds' contact lines cross \
-             (the quadric fitted through them is not positive definite)"
-        )),
-        EllipsoidError::Degenerate => KernelError::Failed(format!("the G2 corner at {named}: its setback ellipsoid has no finite fit")),
-    })?;
-    let failed = || KernelError::Failed(format!("the G2 corner at {named}: its setback ellipsoid misses an edge or a contact line"));
-    let mut least: f64 = 0.0;
-    for u in &frame.away {
-        least = least.max(ellipsoid.intercept(*u).ok_or_else(failed)?);
-    }
-    let k = crate::corner_g2::SETBACK_SCALE;
-    let setback = k * least;
-    let mut ease: f64 = 0.0;
-    for f in &frame.faces {
-        for (e, into) in [(f.i, f.into_i), (f.j, f.into_j)] {
-            let (u, d) = (*frame.away.get(e).ok_or_else(failed)?, *frame.rail.get(e).ok_or_else(failed)?);
-            let crosses = ellipsoid.line_exit(into * d, u, k).ok_or_else(failed)?;
-            ease = ease.max(setback - crosses);
+/// A corner's ellipsoid ([`fillet_g2_corner_setback`]) with its frame and least setback, and the
+/// corner named for messages.
+struct CornerEllipsoid {
+    frame: CornerFrame,
+    ellipsoid: solidcraft_geom::ellipsoid::CentredEllipsoid,
+    least: f64,
+    named: String,
+}
+
+impl CornerEllipsoid {
+    fn of(faces: &Faces, vertex: u32, radius: f64) -> Result<Option<CornerEllipsoid>> {
+        use solidcraft_geom::ellipsoid::{CentredEllipsoid, Condition, EllipsoidError};
+        let Some(frame) = corner_frame(faces, vertex, radius) else { return Ok(None) };
+        let p = faces.point(vertex).unwrap_or(Vec3::ZERO);
+        let named = format!("({:.3}, {:.3}, {:.3})", p.x, p.y, p.z);
+        let conditions: Vec<Condition> =
+            frame.faces.iter().flat_map(|f| [Condition::On(f.crossing), Condition::Square { at: f.crossing, normal: f.normal }]).collect();
+        let ellipsoid = CentredEllipsoid::fit(&conditions).map_err(|e| match e {
+            EllipsoidError::NotPositiveDefinite => KernelError::Invalid(format!(
+                "the G2 corner at {named} takes no setback: no ellipsoid about it passes through the points where its rounds' contact lines cross \
+                 (the quadric fitted through them is not positive definite)"
+            )),
+            EllipsoidError::Degenerate => KernelError::Failed(format!("the G2 corner at {named}: its setback ellipsoid has no finite fit")),
+        })?;
+        let mut least: f64 = 0.0;
+        for u in &frame.away {
+            least = least.max(ellipsoid.intercept(*u).ok_or_else(|| missed(&named))?);
         }
+        if !(least.is_finite() && least > 0.0) {
+            return Err(missed(&named));
+        }
+        Ok(Some(CornerEllipsoid { frame, ellipsoid, least, named }))
     }
-    if !(least.is_finite() && least > 0.0 && ease.is_finite()) {
-        return Err(failed());
+
+    /// The setback and ease with the ellipsoid scaled by `k`: `k` times the least setback, and
+    /// the longest stretch from where the scaled ellipsoid crosses a round's contact line to it.
+    fn at_scale(&self, k: f64) -> Result<CornerSetback> {
+        let setback = k * self.least;
+        let mut ease: f64 = 0.0;
+        for f in &self.frame.faces {
+            for (e, into) in [(f.i, f.into_i), (f.j, f.into_j)] {
+                let (u, d) = (*self.frame.away.get(e).ok_or_else(|| missed(&self.named))?, *self.frame.rail.get(e).ok_or_else(|| missed(&self.named))?);
+                let crosses = self.ellipsoid.line_exit(into * d, u, k).ok_or_else(|| missed(&self.named))?;
+                ease = ease.max(setback - crosses);
+            }
+        }
+        if !ease.is_finite() {
+            return Err(missed(&self.named));
+        }
+        Ok(CornerSetback { least: self.least, scale: k, setback, ease })
     }
-    Ok(Some(CornerSetback { least, setback, ease }))
+}
+
+fn missed(named: &str) -> KernelError {
+    KernelError::Failed(format!("the G2 corner at {named}: its setback ellipsoid misses an edge or a contact line"))
+}
+
+/// The default setbacks of the G2 corners at `corners` (each with the setback given at it, if
+/// any): by each corner's ellipsoid at [`crate::corner_g2::SETBACK_SCALE`] where its setback and
+/// ease fit every edge at it, else at the largest scale down to 1 at which they do. SMLib needs a
+/// setback and its ease shorter than every edge at the corner, and where the edge's other end is
+/// set back too, the four together shorter than it: on such an edge a corner's share is the edge
+/// less a given setback and ease at the other end, or, where the other end's is a default too
+/// and the two do not fit, the edge in proportion to the two unshrunk. Refused where not even the
+/// bare intercept (scale 1) and its ease fit, naming the length the corner needs. `None` for a
+/// corner the ellipsoid cannot read.
+fn default_setbacks(faces: &Faces, corners: &[(u32, Option<f64>)], radius: f64) -> Result<Vec<Option<CornerSetback>>> {
+    let k0 = crate::corner_g2::SETBACK_SCALE;
+    let ellipsoids: Vec<Option<CornerEllipsoid>> = corners.iter().map(|(v, _)| CornerEllipsoid::of(faces, *v, radius)).collect::<Result<_>>()?;
+    // Each corner's whole setback and ease along its edges: given (with the factor's ease), or the
+    // unshrunk default.
+    let mut whole: Vec<Option<(f64, bool)>> = Vec::with_capacity(corners.len());
+    for ((_, given), e) in corners.iter().zip(&ellipsoids) {
+        whole.push(match (given, e) {
+            (Some(d), _) => Some((d + crate::corner_g2::EASE_FACTOR * radius, false)),
+            (None, Some(e)) => {
+                let s = e.at_scale(k0)?;
+                Some((s.setback + s.ease, true))
+            }
+            (None, None) => None,
+        });
+    }
+    let mut out = Vec::with_capacity(corners.len());
+    for ((given, e), mine) in corners.iter().map(|(_, g)| g).zip(&ellipsoids).zip(&whole) {
+        let (Some(e), None, Some((d, _))) = (e, given, mine) else {
+            out.push(match e {
+                Some(e) if given.is_some() => Some(CornerSetback { least: e.least, scale: k0, setback: e.least * k0, ease: 0.0 }),
+                _ => None,
+            });
+            continue;
+        };
+        // The room this corner has along each edge.
+        let mut room = f64::INFINITY;
+        let mut short = None;
+        for &(_, length, far) in &e.frame.edges {
+            let other = corners.iter().position(|(v, _)| *v == far).and_then(|i| whole.get(i).copied().flatten());
+            let here = match other {
+                Some((f, false)) => length - f,
+                Some((f, true)) if d + f >= length => length * d / (d + f),
+                Some(_) => f64::INFINITY,
+                None if *d >= length => length,
+                None => f64::INFINITY,
+            };
+            if here < room {
+                room = here;
+                short = Some(length);
+            }
+        }
+        let fits = |s: &CornerSetback| s.setback + s.ease < room;
+        let full = e.at_scale(k0)?;
+        if fits(&full) {
+            out.push(Some(full));
+            continue;
+        }
+        let bare = e.at_scale(1.0)?;
+        if !fits(&bare) {
+            let need = bare.setback + bare.ease;
+            return Err(KernelError::Invalid(format!(
+                "the G2 corner at {} has no room for its setback: at the least (the ellipsoid's intercept {:.4} mm and its ease {:.4} mm) it takes {:.4} mm along each edge, and its edge of {:.4} mm leaves it {:.4} (an edge longer than {:.4} mm works)",
+                e.named,
+                bare.setback,
+                bare.ease,
+                need,
+                short.unwrap_or(room),
+                room,
+                short.map(|l| l - room + need).unwrap_or(need)
+            )));
+        }
+        // The largest scale that fits, by bisection (the setback and its ease grow with it).
+        let (mut lo, mut hi) = (1.0, k0);
+        for _ in 0..60 {
+            let mid = 0.5 * (lo + hi);
+            if fits(&e.at_scale(mid)?) {
+                lo = mid;
+            } else {
+                hi = mid;
+            }
+        }
+        out.push(Some(e.at_scale(lo)?));
+    }
+    Ok(out)
 }
 
 /// [`fillet`] whose corners where three or more rounded edges meet are G2 patches
@@ -525,14 +643,15 @@ fn g2_corners(body: &Body, edges: &[Vec3], radius: f64, setbacks: &[(Vec3, f64)]
             *slot = Some(*d);
         }
     }
-    // Each corner's setback and ease: by its ellipsoid ([`corner_ellipsoid_setback`]) unless
-    // given, a given one refused below the ellipsoid's intercept; at a corner the ellipsoid
-    // cannot read (a curved face or edge), the factors of the radius.
+    // Each corner's setback and ease: by its ellipsoid unless given, a given one refused below the
+    // ellipsoid's intercept, a default one shrunk to fit its edges ([`default_setbacks`]); at a
+    // corner the ellipsoid cannot read (a curved face or edge), the factors of the radius.
     let faces = Faces::of(body)?;
+    let vertices: Vec<(u32, Option<f64>)> = corners.iter().zip(&given).map(|((v, _), g)| (*v, *g)).collect();
+    let defaults = default_setbacks(&faces, &vertices, radius)?;
     let mut set_back = Vec::with_capacity(corners.len());
     let mut eases = Vec::with_capacity(corners.len());
-    for ((v, p), given) in corners.iter().zip(given) {
-        let by_ellipsoid = corner_ellipsoid_setback(&faces, *v, radius)?;
+    for (((_, p), given), by_ellipsoid) in corners.iter().zip(given).zip(defaults) {
         let (distance, ease) = match (given, by_ellipsoid) {
             (Some(d), Some(e)) if d < e.least * (1.0 - 1e-9) => {
                 let shown = format!("{:.4}", e.least).trim_end_matches('0').trim_end_matches('.').to_string();

@@ -422,27 +422,40 @@ fn notched() -> Body {
     boolean(&a, &b, BoolOp::Cut).unwrap().unwrap()
 }
 
-/// The notch's inner corner, three concave r5 rounds (ladder 07/019): set back 7.5 and filled
-/// (the default, 8.84 and its ease 1.55, is longer than the notch's 10 mm edge), one closed valid
-/// solid with the ball corner's faces but its sphere (12) and the six patches; G1 and G2 across
-/// every seam along its whole length, where the ball jumps 1 / r.
+/// The notch's inner corner, three concave r5 rounds (ladder 07/019), at its default setback:
+/// the ellipsoid's 1.25 x sqrt 2 r (8.84) and its ease (1.55) would not fit the notch's 10 mm
+/// vertical edge, so the scale shrinks to where they do, 1.1785 (8.33 and 1.67, together just
+/// under 10); one closed valid solid with the ball corner's faces but its sphere (12) and the six
+/// patches; G1 and G2 across every seam along its whole length, where the ball jumps 1 / r.
 #[test]
 fn a_concave_corner_takes_the_g2_patch_too() {
     let body = notched();
     let edges = [Vec3::new(50.0, 20.0, 10.0), Vec3::new(40.0, 30.0, 10.0), Vec3::new(40.0, 20.0, 15.0)];
+    let near = Vec3::new(40.0, 20.0, 10.0);
+    let s = fillet_g2_corner_setback(&body, near, 5.0).unwrap().unwrap();
+    eprintln!("concave corner: scale {:.6}, setback {:.6}, ease {:.6} (together {:.9})", s.scale, s.setback, s.ease, s.setback + s.ease);
+    assert!((s.scale - 1.1785).abs() < 1e-4 && s.setback + s.ease < 10.0 && s.setback + s.ease > 10.0 - 1e-9, "{s:?}");
     let ball = fillet(&body, &edges, 5.0).unwrap();
-    let g2 = fillet_g2_corners(&body, &edges, 5.0, &[(Vec3::new(40.0, 20.0, 10.0), 7.5)]).unwrap();
+    let g2 = fillet_g2_corners(&body, &edges, 5.0, &[]).unwrap();
     assert!(g2.validity().is_empty(), "{:?}", g2.validity());
     let v = crate::validity::validity(&g2);
     assert!(v.ok(), "{v:?}");
     let (m, mb) = (measure(&g2).unwrap(), measure(&ball).unwrap());
-    let near = Vec3::new(40.0, 20.0, 10.0);
     let c = graded("concave G2 corner", &g2, near, 11.0, 1.2);
     let b = graded("concave ball corner", &ball, near, 11.0, 1.2);
     eprintln!("concave G2 corner: {} faces (ball {}), volume {:.4} (ball {:.4})", m.faces, mb.faces, m.volume, mb.volume);
     assert_eq!(m.faces, mb.faces - 1 + 6);
     assert!(c.normal_angle_deg <= EXACT_ANGLE_DEG && c.curvature_jump_per_mm <= EXACT_JUMP_PER_MM, "{c:?}");
     assert!(b.curvature_jump_clear_per_mm > 0.19);
+    // A notch 9 mm deep leaves its vertical edge too short for even the bare intercept
+    // (7.07) and its ease (2.07): refused, naming the length that works.
+    let a = box_solid(Vec3::ZERO, Vec3::new(60.0, 40.0, 20.0)).unwrap();
+    let cut = box_solid(Vec3::new(40.0, 20.0, 11.0), Vec3::new(70.0, 50.0, 30.0)).unwrap();
+    let shallow = boolean(&a, &cut, BoolOp::Cut).unwrap().unwrap();
+    let edges = [Vec3::new(50.0, 20.0, 11.0), Vec3::new(40.0, 30.0, 11.0), Vec3::new(40.0, 20.0, 15.0)];
+    let err = fillet_g2_corners(&shallow, &edges, 5.0, &[]).unwrap_err().to_string();
+    eprintln!("9 mm notch: {err}");
+    assert!(err.contains("no room for its setback") && err.contains("an edge longer than 9.1421 mm works"), "{err}");
 }
 
 /// The notch's outer corner, two convex rounds and a concave one: SMLib sets back only a corner
