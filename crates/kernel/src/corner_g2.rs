@@ -27,20 +27,27 @@ use solidcraft_geom::fill_quad::QuadFill;
 use crate::body::Body;
 use crate::{KernelError, Result};
 
-/// A corner's default setback: this times its round's radius along each edge. It must reach
-/// past where the rounds meet without one (the radius, at a square corner), and SMLib's own
-/// patch bulges past the faces beyond about twice the radius; one and a half leaves the patch a
-/// side as long as the round's section is wide, with room either way.
+/// A G2 corner's default setback is this times the intercept on its edges of the corner's
+/// ellipsoid through the points where its rounds' contact lines cross
+/// ([`crate::fillet_g2_corner_setback`]; the intercept is `sqrt 2 r` at a box corner, so the
+/// setback 1.77 r), and its rounds' ease runs from where the ellipsoid so scaled crosses their
+/// contact lines to the setback (0.31 r at a box corner).
+pub const SETBACK_SCALE: f64 = 1.25;
+
+/// The setback of a G2 corner the ellipsoid cannot read (one with a curved face or edge): this
+/// times its round's radius along each edge. It must reach past where the rounds meet without
+/// one (the radius, at a square corner), and SMLib's own patch bulges past the faces beyond
+/// about twice the radius.
 pub const DEFAULT_SETBACK_FACTOR: f64 = 1.5;
 
-/// Each round's ease into the curvature-continuous section before a G2 corner's setback: this
-/// times its radius along each edge (SMLib's `smlib_blend_setback_open_eased`), a quarter of the
-/// round's width: short enough that the default setback and the ease fit on an edge 1.75 r
-/// long beside the corner (and both ends of one 3.5 r long), as the corner's patches need. It makes the
-/// hole's conditions agree at its corners: the section meets each planar face with no
-/// curvature across, and the face's curve leaves the contact line without turning, so the
-/// patches can be G2 to the rounds and the faces all the way to the corners. A round keeps its
-/// own section up to where its ease starts, `setback + ease` from the vertex.
+/// Each round's ease into the curvature-continuous section before a G2 corner's setback, where
+/// the setback is given or the corner is one the ellipsoid cannot read (else the ellipsoid's
+/// ease, [`SETBACK_SCALE`]): this times its radius along each edge (SMLib's
+/// `smlib_blend_setback_open_eased`), a quarter of the round's width. The ease makes the hole's
+/// conditions agree at its corners: the section meets each planar face with no curvature
+/// across, and the face's curve leaves the contact line without turning, so the patches can be
+/// G2 to the rounds and the faces all the way to the corners. A round keeps its own section up
+/// to where its ease starts, `setback + ease` from the vertex.
 pub const EASE_FACTOR: f64 = 0.25;
 
 /// How far the patch's normal curvature across a seam may be from the face's, clear of the hole's

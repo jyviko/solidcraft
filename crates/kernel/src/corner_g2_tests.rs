@@ -81,7 +81,8 @@ fn round_seams(body: &Body) -> f64 {
     report.seams.iter().flat_map(|s| s.stations.iter()).map(|st| st.curvature_jump_per_mm).fold(0.0, f64::max)
 }
 
-/// The G2 corner of 07/015, set back the default 7.5 (1.5 r): one closed valid solid of the box's
+/// The G2 corner of 07/015 at its default setback (1.25 x the ellipsoid's intercept sqrt 2 r,
+/// 8.84 at r5): one closed valid solid of the box's
 /// six faces, the three rounds and the six patches about the centre (15 faces, as SMLib's own
 /// setback corner, 07/013), within the box; graded as the ladder grades it, every seam of the
 /// corner tangent and, 1.2 mm clear of the turns, curvature continuous to `CURVATURE_SHARE / r`
@@ -355,6 +356,45 @@ fn a_box_with_every_edge_rounded_has_eight_g2_corners() {
     assert_eq!(m.faces, 6 + 12 + 8 * 6);
 }
 
+/// The default setback of a G2 corner, by its ellipsoid through the points where its rounds'
+/// contact lines cross on each face (crossing each face square to it there): at a box corner the
+/// sphere through (r, r, 0), (r, 0, r), (0, r, r), its intercept sqrt 2 r on each edge the least
+/// setback, the setback 1.25 times that, and the ease from where the sphere so scaled crosses the
+/// contact lines, `r sqrt(2 1.25^2 - 1)` along the edge, to the setback. The same at the 60 x 40
+/// x 20 box's r5 corner, the 20 mm box's r3 corner, the 40 x 30 x 20 box's r3 corner and each of
+/// the eight r2 corners of a 30 x 20 x 10 box. A given setback below the intercept is refused
+/// naming it.
+#[test]
+fn the_corner_ellipsoid_sets_the_g2_setback_and_its_ease() {
+    let k = crate::corner_g2::SETBACK_SCALE;
+    let check = |name: &str, body: &Body, corner: Vec3, r: f64| {
+        let s = fillet_g2_corner_setback(body, corner, r).unwrap().unwrap();
+        eprintln!("{name}: least {:.4}, setback {:.4}, ease {:.4} (r {r})", s.least, s.setback, s.ease);
+        let least = 2f64.sqrt() * r;
+        assert!((s.least - least).abs() < 1e-9 * r, "{name}: {s:?}");
+        assert!((s.setback - k * least).abs() < 1e-9 * r, "{name}: {s:?}");
+        assert!((s.ease - (k * least - r * (2.0 * k * k - 1.0).sqrt())).abs() < 1e-9 * r, "{name}: {s:?}");
+    };
+    let (body, _) = box_corner();
+    check("60 x 40 x 20 box, r5", &body, Vec3::new(60.0, 40.0, 20.0), 5.0);
+    let small = box_solid(Vec3::ZERO, Vec3::new(20.0, 20.0, 20.0)).unwrap();
+    check("20 mm box, r3", &small, Vec3::new(20.0, 20.0, 20.0), 3.0);
+    let rig = box_solid(Vec3::ZERO, Vec3::new(40.0, 30.0, 20.0)).unwrap();
+    check("40 x 30 x 20 box, r3", &rig, Vec3::new(40.0, 30.0, 20.0), 3.0);
+    let eight = box_solid(Vec3::ZERO, Vec3::new(30.0, 20.0, 10.0)).unwrap();
+    for x in [0.0, 30.0] {
+        for y in [0.0, 20.0] {
+            for z in [0.0, 10.0] {
+                check(&format!("30 x 20 x 10 box corner ({x}, {y}, {z}), r2"), &eight, Vec3::new(x, y, z), 2.0);
+            }
+        }
+    }
+    let edges = [Vec3::new(20.0, 30.0, 20.0), Vec3::new(40.0, 15.0, 20.0), Vec3::new(40.0, 30.0, 10.0)];
+    let short = fillet_g2_with_g2_corners(&rig, &edges, 3.0, &[(Vec3::new(40.0, 30.0, 20.0), 3.5)]).unwrap_err().to_string();
+    eprintln!("set back 3.5 at r3: {short}");
+    assert!(short.contains("the setback must be at least 4.2426 mm at the corner (40.000, 30.000, 20.000)"), "{short}");
+}
+
 /// What the G2 corner cannot do is refused: a setback naming no corner, one that does not reach
 /// past where the rounds meet; two rounded edges at a corner are no G2 corner, the plain fillet.
 #[test]
@@ -379,8 +419,8 @@ fn notched() -> Body {
     boolean(&a, &b, BoolOp::Cut).unwrap().unwrap()
 }
 
-/// The notch's inner corner, three concave r5 rounds (ladder 07/019): set back 7.5 and filled,
-/// one closed valid solid with the ball corner's faces but its sphere (13), and the six
+/// The notch's inner corner, three concave r5 rounds (ladder 07/019): set back 7.5 and filled
+/// (the default, 8.84 and its ease 1.55, is longer than the notch's 10 mm edge), one closed valid solid with the ball corner's faces but its sphere (13), and the six
 /// patches; tangent across every seam and curvature continuous clear of the turns, where the
 /// ball's jump 1 / r.
 #[test]
@@ -388,7 +428,7 @@ fn a_concave_corner_takes_the_g2_patch_too() {
     let body = notched();
     let edges = [Vec3::new(50.0, 20.0, 10.0), Vec3::new(40.0, 30.0, 10.0), Vec3::new(40.0, 20.0, 15.0)];
     let ball = fillet(&body, &edges, 5.0).unwrap();
-    let g2 = fillet_g2_corners(&body, &edges, 5.0, &[]).unwrap();
+    let g2 = fillet_g2_corners(&body, &edges, 5.0, &[(Vec3::new(40.0, 20.0, 10.0), 7.5)]).unwrap();
     assert!(g2.validity().is_empty(), "{:?}", g2.validity());
     let v = crate::validity::validity(&g2);
     assert!(v.ok(), "{v:?}");
@@ -403,13 +443,14 @@ fn a_concave_corner_takes_the_g2_patch_too() {
 }
 
 /// The notch's outer corner, two convex rounds and a concave one: SMLib sets back only a corner
-/// of one convexity, so the G2 corner is refused as not supported (the rolling ball builds).
+/// of one convexity, so the G2 corner is refused as not supported (the rolling ball builds). Set
+/// back 7.5, which fits the notch's 10 mm edge (the default and its ease, 10.4, does not).
 #[test]
 fn a_mixed_convexity_corner_is_refused() {
     let body = notched();
     let edges = [Vec3::new(50.0, 20.0, 10.0), Vec3::new(60.0, 30.0, 10.0), Vec3::new(60.0, 20.0, 15.0)];
     assert!(fillet(&body, &edges, 5.0).is_ok());
-    let err = fillet_g2_corners(&body, &edges, 5.0, &[]).unwrap_err().to_string();
+    let err = fillet_g2_corners(&body, &edges, 5.0, &[(Vec3::new(60.0, 20.0, 10.0), 7.5)]).unwrap_err().to_string();
     eprintln!("mixed corner: {err}");
     // The refusal names the corner and why: its rounds are not all of one convexity.
     assert!(err.contains("not supported yet") && err.contains("(60.000, 20.000, 10.000)") && err.contains("all convex or all concave"), "{err}");
@@ -434,7 +475,8 @@ fn curvature_rounds_meet_at_a_g2_corner() {
     let smlib_clear = graded("curvature rounds, SMLib's corner", &smlib_corner, corner, 15.0, 1.2).curvature_jump_clear_per_mm;
     assert!(n > 0 && clear <= CURVATURE_SHARE / 5.0, "{clear} over {n} stations");
     assert!(smlib_clear > 10.0 * CURVATURE_SHARE / 5.0, "SMLib's own corner patch: {smlib_clear}");
-    // Both differ only within the setback cube (side 1.5 r = 7.5) at the corner.
+    // Both differ only within the cube of the setback and its ease at the corner.
+    let s = fillet_g2_corner_setback(&body, corner, 5.0).unwrap().unwrap();
     let (a, b) = (measure(&g2).unwrap().volume, measure(&smlib_corner).unwrap().volume);
-    assert!((a - b).abs() < 7.5f64.powi(3), "{a} vs {b}");
+    assert!((a - b).abs() < (s.setback + s.ease).powi(3), "{a} vs {b}");
 }

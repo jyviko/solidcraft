@@ -292,21 +292,40 @@ fn corner_vertex(body: &Body, faces: &Faces, at: Vec3) -> Option<u32> {
         .map(|(_, v)| v)
 }
 
-/// The least setback a corner of rounds of `radius` at `vertex` takes: on each face at the
-/// corner, the contact lines (rails) of the two rounded edges beside it cross, and a setback
-/// must reach past that crossing along both edges (smlib_blend_setback). A rail lies
-/// r tan(psi / 2) from its edge, psi the angle between the outward normals of the edge's two
-/// faces (r on faces square to each other); the rails of edges at angle alpha on a face, d1 and
-/// d2 from them, cross (d2 + d1 cos alpha) / sin alpha along the first edge from the vertex.
-/// Exact for planar faces and straight edges; `None` for a corner with any other (left to SMLib)
-/// or one it cannot read.
-fn setback_minimum(faces: &Faces, vertex: u32, radius: f64) -> Option<f64> {
+/// A corner of planar faces and straight edges at a vertex, read for its setback: each edge's
+/// unit direction away from the vertex and its rail's (contact line's) distance from it, and per
+/// face between two of the edges, where their rails cross.
+struct CornerFrame {
+    away: Vec<Vec3>,
+    rail: Vec<f64>,
+    faces: Vec<CornerFace>,
+}
+
+/// A face at a [`CornerFrame`]'s vertex, between its edges `i` and `j`.
+struct CornerFace {
+    i: usize,
+    j: usize,
+    /// The face's unit normal.
+    normal: Vec3,
+    /// Where the rails of `i` and `j` cross on the face, from the vertex.
+    crossing: Vec3,
+    /// The unit directions in the face square to `i` and to `j`, into the face.
+    into_i: Vec3,
+    into_j: Vec3,
+}
+
+/// The corner of rounds of `radius` at `vertex`: on each face at the corner, the contact lines
+/// (rails) of the two rounded edges beside it cross. A rail lies r tan(psi / 2) from its edge,
+/// psi the angle between the outward normals of the edge's two faces (r on faces square to each
+/// other); the rails of edges `u`, `w` at angle alpha on a face, d1 and d2 from them, cross at
+/// (d2 u + d1 w) / sin alpha from the vertex. Exact for planar faces and straight edges; `None`
+/// for a corner with any other (left to SMLib) or one it cannot read.
+fn corner_frame(faces: &Faces, vertex: u32, radius: f64) -> Option<CornerFrame> {
     let at: Vec<usize> =
         (0..faces.rec.edges.len()).filter(|e| faces.rec.edges.get(*e).is_some_and(|x| !x.uses.is_empty() && x.vertices.contains(&vertex))).collect();
     if at.len() < 3 {
         return None;
     }
-    // Each edge's direction away from the vertex and its rail's distance from it.
     let mut away = Vec::with_capacity(at.len());
     let mut rail = Vec::with_capacity(at.len());
     for e in &at {
@@ -320,20 +339,107 @@ fn setback_minimum(faces: &Faces, vertex: u32, radius: f64) -> Option<f64> {
         let cos = faces.plane_normal(f as usize)?.dot(faces.plane_normal(g as usize)?).clamp(-1.0, 1.0);
         rail.push(radius * (cos.acos() / 2.0).tan());
     }
-    let mut least: f64 = 0.0;
     let around: BTreeSet<u32> = at.iter().flat_map(|e| faces.faces_of(*e)).collect();
+    let mut corner_faces = Vec::with_capacity(around.len());
     for f in around {
         let beside: Vec<usize> = (0..at.len()).filter(|i| at.get(*i).is_some_and(|e| faces.faces_of(*e).contains(&f))).collect();
         let [i, j] = beside[..] else { return None };
-        let cos = away.get(i)?.dot(*away.get(j)?).clamp(-1.0, 1.0);
+        let (u, w) = (*away.get(i)?, *away.get(j)?);
+        let cos = u.dot(w).clamp(-1.0, 1.0);
         let sin = (1.0 - cos * cos).sqrt();
         if sin <= 1e-9 {
             return None;
         }
         let (di, dj) = (*rail.get(i)?, *rail.get(j)?);
-        least = least.max((dj + di * cos) / sin).max((di + dj * cos) / sin);
+        corner_faces.push(CornerFace {
+            i,
+            j,
+            normal: faces.plane_normal(f as usize)?,
+            crossing: (u * dj + w * di) * (1.0 / sin),
+            into_i: (w - u * cos).normalized()?,
+            into_j: (u - w * cos).normalized()?,
+        });
+    }
+    Some(CornerFrame { away, rail, faces: corner_faces })
+}
+
+/// The least setback a corner of rounds of `radius` at `vertex` takes: a setback must reach past
+/// where the rails cross on each face ([`corner_frame`]), along both edges beside it
+/// (smlib_blend_setback): (d2 + d1 cos alpha) / sin alpha along the first. `None` for a corner
+/// [`corner_frame`] cannot read.
+fn setback_minimum(faces: &Faces, vertex: u32, radius: f64) -> Option<f64> {
+    let frame = corner_frame(faces, vertex, radius)?;
+    let mut least: f64 = 0.0;
+    for f in &frame.faces {
+        least = least.max(f.crossing.dot(*frame.away.get(f.i)?)).max(f.crossing.dot(*frame.away.get(f.j)?));
     }
     (least.is_finite() && least > 0.0).then_some(least)
+}
+
+/// A G2 corner's setback by the corner's ellipsoid ([`corner_ellipsoid_setback`]).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CornerSetback {
+    /// The ellipsoid's largest intercept on the corner's edges: the least setback the corner takes.
+    pub least: f64,
+    /// [`crate::corner_g2::SETBACK_SCALE`] times `least`: the corner's default setback.
+    pub setback: f64,
+    /// The rounds' ease before the default setback: the longest, over the rounds' contact lines,
+    /// from where the scaled ellipsoid crosses one to the setback.
+    pub ease: f64,
+}
+
+/// The setback of the G2 corner of rounds of `radius` at the vertex nearest `at`, by the
+/// corner's ellipsoid: centred at the vertex, `x^T A x = 1` with `A` symmetric (six unknowns,
+/// its axes not tied to the edges), through the points where neighbouring rounds' contact lines
+/// cross on each face and crossing each face square to it there, solved by the pseudo-inverse
+/// (`solidcraft_geom::ellipsoid`: exact at a three-edge corner, least squares at four or more
+/// edges). Its intercept on each edge is the least setback there (`sqrt 2 r` at a box corner);
+/// the corner's setback is [`crate::corner_g2::SETBACK_SCALE`] times the largest (SMLib keeps one
+/// per corner), and the ease the longest stretch from where the ellipsoid so scaled crosses a
+/// round's contact line to the setback. `None` where no vertex is near `at` or at a corner
+/// [`corner_frame`] cannot read (a curved face or edge); refused where no ellipsoid fits (the
+/// fitted quadric not positive definite), naming the corner.
+pub fn fillet_g2_corner_setback(body: &Body, at: Vec3, radius: f64) -> Result<Option<CornerSetback>> {
+    body.require_brep("fillet")?;
+    let faces = Faces::of(body)?;
+    let Some(v) = corner_vertex(body, &faces, at) else { return Ok(None) };
+    corner_ellipsoid_setback(&faces, v, radius)
+}
+
+/// [`fillet_g2_corner_setback`] at `vertex`.
+fn corner_ellipsoid_setback(faces: &Faces, vertex: u32, radius: f64) -> Result<Option<CornerSetback>> {
+    use solidcraft_geom::ellipsoid::{CentredEllipsoid, Condition, EllipsoidError};
+    let Some(frame) = corner_frame(faces, vertex, radius) else { return Ok(None) };
+    let p = faces.point(vertex).unwrap_or(Vec3::ZERO);
+    let named = format!("({:.3}, {:.3}, {:.3})", p.x, p.y, p.z);
+    let conditions: Vec<Condition> =
+        frame.faces.iter().flat_map(|f| [Condition::On(f.crossing), Condition::Square { at: f.crossing, normal: f.normal }]).collect();
+    let ellipsoid = CentredEllipsoid::fit(&conditions).map_err(|e| match e {
+        EllipsoidError::NotPositiveDefinite => KernelError::Invalid(format!(
+            "the G2 corner at {named} takes no setback: no ellipsoid about it passes through the points where its rounds' contact lines cross \
+             (the quadric fitted through them is not positive definite)"
+        )),
+        EllipsoidError::Degenerate => KernelError::Failed(format!("the G2 corner at {named}: its setback ellipsoid has no finite fit")),
+    })?;
+    let failed = || KernelError::Failed(format!("the G2 corner at {named}: its setback ellipsoid misses an edge or a contact line"));
+    let mut least: f64 = 0.0;
+    for u in &frame.away {
+        least = least.max(ellipsoid.intercept(*u).ok_or_else(failed)?);
+    }
+    let k = crate::corner_g2::SETBACK_SCALE;
+    let setback = k * least;
+    let mut ease: f64 = 0.0;
+    for f in &frame.faces {
+        for (e, into) in [(f.i, f.into_i), (f.j, f.into_j)] {
+            let (u, d) = (*frame.away.get(e).ok_or_else(failed)?, *frame.rail.get(e).ok_or_else(failed)?);
+            let crosses = ellipsoid.line_exit(into * d, u, k).ok_or_else(failed)?;
+            ease = ease.max(setback - crosses);
+        }
+    }
+    if !(least.is_finite() && least > 0.0 && ease.is_finite()) {
+        return Err(failed());
+    }
+    Ok(Some(CornerSetback { least, setback, ease }))
 }
 
 /// [`fillet`] whose corners where three or more rounded edges meet are G2 patches
@@ -380,7 +486,7 @@ fn g2_corners(body: &Body, edges: &[Vec3], radius: f64, setbacks: &[(Vec3, f64)]
         }
     }
     let point = |v: u32| rec.vertices.get(v as usize).map(|x| v3(x.point));
-    let mut corners: Vec<Vec3> = Vec::new();
+    let mut corners: Vec<(u32, Vec3)> = Vec::new();
     for (v, around) in &at {
         let rounded = around.iter().filter(|e| picked.contains(e)).count();
         if rounded < 3 {
@@ -393,19 +499,19 @@ fn g2_corners(body: &Body, edges: &[Vec3], radius: f64, setbacks: &[(Vec3, f64)]
                 p.x, p.y, p.z
             )));
         }
-        corners.push(p);
+        corners.push((*v, p));
     }
     if corners.is_empty() {
         return if curvature { fillet_g2(body, edges, radius) } else { fillet(body, edges, radius) };
     }
-    // Each corner's setback: the one given at its vertex, else the default.
+    // Each corner's setback given at its vertex, if any.
     let reach = body.size() * 0.05 + 1e-3;
-    let mut distance = vec![crate::corner_g2::DEFAULT_SETBACK_FACTOR * radius; corners.len()];
+    let mut given: Vec<Option<f64>> = vec![None; corners.len()];
     for (p, d) in setbacks {
         let k = corners
             .iter()
             .enumerate()
-            .map(|(k, c)| (c.dist(*p), k))
+            .map(|(k, (_, c))| (c.dist(*p), k))
             .filter(|(d, _)| *d <= reach)
             .min_by(|a, b| a.0.total_cmp(&b.0))
             .map(|(_, k)| k)
@@ -415,14 +521,36 @@ fn g2_corners(body: &Body, edges: &[Vec3], radius: f64, setbacks: &[(Vec3, f64)]
                     p.x, p.y, p.z
                 ))
             })?;
-        if let Some(slot) = distance.get_mut(k) {
-            *slot = *d;
+        if let Some(slot) = given.get_mut(k) {
+            *slot = Some(*d);
         }
     }
-    let set_back: Vec<(Vec3, f64)> = corners.iter().copied().zip(distance).collect();
+    // Each corner's setback and ease: by its ellipsoid ([`corner_ellipsoid_setback`]) unless
+    // given, a given one refused below the ellipsoid's intercept; at a corner the ellipsoid
+    // cannot read (a curved face or edge), the factors of the radius.
+    let faces = Faces::of(body)?;
+    let mut set_back = Vec::with_capacity(corners.len());
+    let mut eases = Vec::with_capacity(corners.len());
+    for ((v, p), given) in corners.iter().zip(given) {
+        let by_ellipsoid = corner_ellipsoid_setback(&faces, *v, radius)?;
+        let (distance, ease) = match (given, by_ellipsoid) {
+            (Some(d), Some(e)) if d < e.least * (1.0 - 1e-9) => {
+                let shown = format!("{:.4}", e.least).trim_end_matches('0').trim_end_matches('.').to_string();
+                return Err(KernelError::Invalid(format!(
+                    "the setback must be at least {shown} mm at the corner ({:.3}, {:.3}, {:.3}): the corner's ellipsoid through the points \
+                     where its rounds' contact lines cross meets its edges {shown} mm from it",
+                    p.x, p.y, p.z
+                )));
+            }
+            (Some(d), _) => (d, crate::corner_g2::EASE_FACTOR * radius),
+            (None, Some(e)) => (e.setback, e.ease),
+            (None, None) => (crate::corner_g2::DEFAULT_SETBACK_FACTOR * radius, crate::corner_g2::EASE_FACTOR * radius),
+        };
+        set_back.push((*p, distance));
+        eases.push(ease);
+    }
     setbacks_reach(body, edges, radius, &set_back)?;
-    let ease = crate::corner_g2::EASE_FACTOR * radius;
-    let open = crate::blend_smlib::fillet_setback_open(body, edges, radius, &set_back, ease, curvature)?;
+    let open = crate::blend_smlib::fillet_setback_open(body, edges, radius, &set_back, &eases, curvature)?;
     let mut patches = Vec::with_capacity(open.holes.len());
     for hole in &open.holes {
         let (patch, _) = crate::corner_g2::corner_patch(&open.sheet, hole, radius)?;
