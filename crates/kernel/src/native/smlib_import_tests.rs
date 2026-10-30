@@ -36,7 +36,7 @@ fn revolutions_keep_their_analytic_volume() {
     ];
     for (name, body, exact) in cases {
         let s = super::smlib_body(&body).unwrap_or_else(|e| panic!("{name}: {e}"));
-        let check = s.check(solidcraft_smlib::CheckLevel::All).unwrap();
+        let check = s.check(crate::backend::CheckLevel::All).unwrap();
         assert!(check.is_valid(), "{name}: {check}");
         let got = s.volume(1e-7).unwrap();
         assert!(s.is_manifold_solid().unwrap_or(false) && (got - exact).abs() <= 1e-6 * exact, "{name}: SMLib volume {got}, exact {exact}");
@@ -54,7 +54,7 @@ fn smlib_results_go_back_into_smlib() {
         let first = super::smlib_body(&body).unwrap();
         let back = super::body_from_smlib(&first).unwrap_or_else(|e| panic!("{name}: {e}"));
         let again = super::smlib_body(&back).unwrap_or_else(|e| panic!("{name}: {e}"));
-        let check = again.check(solidcraft_smlib::CheckLevel::All).unwrap();
+        let check = again.check(crate::backend::CheckLevel::All).unwrap();
         assert!(check.is_valid(), "{name}: {check}");
         let got = again.volume(1e-7).unwrap();
         assert!((got - exact).abs() <= 1e-6 * exact, "{name}: SMLib volume {got}, exact {exact}");
@@ -66,19 +66,19 @@ fn smlib_results_go_back_into_smlib() {
 /// closed along its seam).
 #[test]
 fn extruded_circles_go_as_cylinders() {
-    use solidcraft_smlib::flat;
+    use crate::backend::flat;
     let body = cylinder(v(0., 50., -60.), v(0., 0., 1.), 40.0, 120.0).unwrap();
     let record = super::brep_record(&body).unwrap();
     let walls = record.faces.iter().filter(|f| matches!(f.surface, solidcraft_geom::brep::Surface::Cylinder { .. })).count();
     assert_eq!((walls, record.faces.len()), (1, 3));
-    let arrays = solidcraft_smlib::import::arrays(&record, true).unwrap();
+    let arrays = crate::backend::import::arrays(&record, true).unwrap();
     let kinds = &arrays.ints[&flat::FACE_SURFACE_TYPE];
     assert!(kinds.iter().all(|k| *k == i64::from(flat::SURFACE_PLANE) || *k == i64::from(flat::SURFACE_CYLINDER)), "{kinds:?}");
     assert_eq!(kinds.iter().filter(|k| **k == i64::from(flat::SURFACE_CYLINDER)).count(), record.faces.len() - 2);
     // A box cut by it is a valid SMLib solid (as a spline it had edges 0.78 mm off its faces).
     let block = box_solid(v(-14., 0., -14.), v(14., 20., 14.)).unwrap();
-    let r = super::smlib_body(&block).unwrap().boolean(&super::smlib_body(&body).unwrap(), solidcraft_smlib::BooleanOp::Subtract).unwrap().unwrap();
-    let check = r.check(solidcraft_smlib::CheckLevel::All).unwrap();
+    let r = super::smlib_body(&block).unwrap().boolean(&super::smlib_body(&body).unwrap(), crate::backend::BooleanOp::Subtract).unwrap().unwrap();
+    let check = r.check(crate::backend::CheckLevel::All).unwrap();
     assert!(check.is_valid(), "{check}");
 }
 
@@ -88,7 +88,7 @@ fn extruded_circles_go_as_cylinders() {
 fn a_cavity_comes_back_from_smlib() {
     let block = box_solid(v(0., 0., 0.), v(40., 40., 40.)).unwrap();
     let cavity = box_solid(v(25., 25., 25.), v(30., 30., 30.)).unwrap();
-    let r = super::smlib_body(&block).unwrap().boolean(&super::smlib_body(&cavity).unwrap(), solidcraft_smlib::BooleanOp::Subtract).unwrap().unwrap();
+    let r = super::smlib_body(&block).unwrap().boolean(&super::smlib_body(&cavity).unwrap(), crate::backend::BooleanOp::Subtract).unwrap().unwrap();
     let back = super::body_from_smlib(&r).unwrap();
     assert_eq!((back.shell_count(), back.face_count()), (2, 12));
     let got = super::smlib_body(&back).unwrap().volume(1e-7).unwrap();
@@ -105,7 +105,7 @@ fn a_revolved_annulus_goes_with_its_flat_faces() {
     let plane = Plane { y: v(0., 0., 1.), ..Plane::XZ };
     let body = crate::revolve(&plane, &[square], Vec2::ZERO, Vec2::Y, 1.5 * PI).unwrap().pop().unwrap();
     let s = super::smlib_body(&body).unwrap();
-    let check = s.check(solidcraft_smlib::CheckLevel::All).unwrap();
+    let check = s.check(crate::backend::CheckLevel::All).unwrap();
     assert!(check.is_valid(), "{check}");
     let exact = 0.75 * PI * (144.0 - 16.0) * 8.0;
     let got = s.volume(1e-7).unwrap();
@@ -134,7 +134,7 @@ fn a_cone_apex_comes_back_measuring_as_it_went() {
 /// a period to lie inside the outer loop (tangency-labs/solidcore#433).
 #[test]
 fn a_hole_in_a_dome_by_its_seam_measures_as_smlib_cuts_it() {
-    use solidcraft_smlib::sweeps::Curve;
+    use crate::backend::sweeps::Curve;
     let a0 = 6.9f64.atan2(26.0);
     let line = |a: [f64; 2], b: [f64; 2]| Curve::Line { start: [a[0], 0.0, a[1]], end: [b[0], 0.0, b[1]] };
     let profile = [
@@ -146,10 +146,10 @@ fn a_hole_in_a_dome_by_its_seam_measures_as_smlib_cuts_it() {
     ];
     // Turned about -z, as the engine revolves the sketch (its normal is -y): the dome's v runs
     // clockwise seen from above, which puts the hole at v near 1.
-    let revolved = solidcraft_smlib::Brep::revolve(&profile, [0.; 3], [0., 0., -1.], std::f64::consts::TAU, true).unwrap();
+    let revolved = crate::backend::Brep::revolve(&profile, [0.; 3], [0., 0., -1.], std::f64::consts::TAU, true).unwrap();
     let cap = super::smlib_body(&super::body_from_smlib(&revolved).unwrap()).unwrap();
     let ball = super::smlib_body(&sphere(v(17.38629136, 4.658642729, 52.090595805), 4.0).unwrap()).unwrap();
-    let cut = cap.tagged(0).unwrap().boolean(&ball.tagged(1).unwrap(), solidcraft_smlib::BooleanOp::Subtract).unwrap().unwrap();
+    let cut = cap.tagged(0).unwrap().boolean(&ball.tagged(1).unwrap(), crate::backend::BooleanOp::Subtract).unwrap().unwrap();
     // The cap less the lens of two spheres, radii 4 and 26.9 at 26.9 apart.
     let (big, small) = (26.9f64, 4.0f64);
     let cap_volume = PI * (49.0 * 20.0 + (26f64.powi(3) - 343.0) / 3.0 + big * big * 20.0 - (big.powi(3) - 6.9f64.powi(3)) / 3.0);

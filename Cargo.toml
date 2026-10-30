@@ -18,19 +18,27 @@ robust = "1.2"
 solidcraft-geom = { path = "crates/geom" }
 solidcraft-profile = { path = "crates/profile" }
 solidcraft-sketch = { path = "crates/sketch" }
-solidcraft-kernel = { path = "crates/kernel" }
+# The kernel's backend is chosen by features (`smlib`, the default, or `solidcore`), passed
+# down from the apps: every crate on the way takes the kernel and its dependents without their
+# defaults and names the backend itself.
+solidcraft-kernel = { path = "crates/kernel", default-features = false }
 solidcraft-smlib = { path = "crates/smlib" }
+solidcraft-solidcore = { path = "crates/solidcore" }
 solidcraft-step = { path = "crates/step" }
 solidcraft-render = { path = "crates/render" }
 solidcraft-gpu = { path = "crates/gpu" }
-solidcraft-doc = { path = "crates/doc" }
-solidcraft-io = { path = "crates/io" }
-solidcraft-engine = { path = "crates/engine" }
-solidcraft-ui-egui = { path = "crates/ui-egui" }
+solidcraft-doc = { path = "crates/doc", default-features = false }
+solidcraft-io = { path = "crates/io", default-features = false }
+solidcraft-engine = { path = "crates/engine", default-features = false }
+solidcraft-ui-egui = { path = "crates/ui-egui", default-features = false }
 solidcraft-space-mouse = { path = "crates/space-mouse" }
-solidcraft-mcp = { path = "crates/mcp" }
+solidcraft-mcp = { path = "crates/mcp", default-features = false }
 solidcraft-derive = { path = "crates/derive" }
 solidcraft-3dx-client = { path = "crates/threedx-client" }
+
+# The pure-Rust port of SMLib (Apache-2.0), the kernel's `solidcore` backend
+# (crates/solidcore), pinned to a commit of its main branch.
+solidcore = { git = "https://github.com/tangency-labs/solidcore", rev = "e2aaf501c0d799c58919158d724a33c6e998a105" }
 
 # foundation
 thiserror = "2"

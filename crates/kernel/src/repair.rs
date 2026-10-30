@@ -212,7 +212,7 @@ fn largest_tolerance(r: &Brep) -> f64 {
 /// Whether SMLib takes face `f` of `r` on its own; `Err` with SMLib's reason when it does not.
 fn alone(r: &Brep, f: usize) -> Result<std::result::Result<(), String>> {
     let one = crate::surfaces::Parts::of(r, &[(f, false)])?.canonical()?;
-    Ok(solidcraft_smlib::Brep::from_record(&one.brep, true).map(|_| ()).map_err(|e| e.to_string()))
+    Ok(crate::backend::Brep::from_record(&one.brep, true).map(|_| ()).map_err(|e| e.to_string()))
 }
 
 /// Every face of `record` SMLib refuses on its own, rebuilt where its surface allows (into
@@ -312,7 +312,7 @@ fn rebuilt_face(r: &Brep, f: usize) -> Result<Option<b::Face>> {
     )
     .ok_or_else(|| invalid("no NURBS form of its surface over its boundary"))?;
     let trim = TrimFace { surface: &face.surface, nurbs: Some(&form), domain, edges, vertices: points, loops, tolerance: r.tolerance };
-    let pcurves = solidcraft_smlib::pcurves::SmlibTrims.trims(&trim).map_err(KernelError::Failed)?;
+    let pcurves = crate::backend::pcurves::SmlibTrims.trims(&trim).map_err(KernelError::Failed)?;
     let mut out = face.clone();
     out.nurbs = Some(form);
     out.domain = domain;

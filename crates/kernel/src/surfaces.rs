@@ -1230,12 +1230,12 @@ fn open_sections(sections: &[(Plane, Vec<Seg2>)]) -> Result<Vec<crate::loft_rail
 
 /// SMLib's side of this module.
 mod imp {
-    use solidcraft_smlib::sweeps::{Affine, Curve, Ends, SweepFrame};
-    use solidcraft_smlib::{Brep as SmBrep, CheckLevel};
+    use crate::backend::sweeps::{Affine, Curve, Ends, SweepFrame};
+    use crate::backend::{Brep as SmBrep, CheckLevel};
 
     use super::*;
 
-    fn sm(what: &'static str) -> impl Fn(solidcraft_smlib::Error) -> KernelError {
+    fn sm(what: &'static str) -> impl Fn(crate::backend::Error) -> KernelError {
         move |e| failed(format!("SMLib {what}: {e}"))
     }
 
@@ -1325,7 +1325,7 @@ mod imp {
 
     pub(super) fn extruded(base: &Plane, chain: &[Numbered], n: Vec3, distance: f64) -> Result<Brep> {
         checked(
-            &SmBrep::extrude(&curves(base, chain)?, a3(n), distance, 0.0, solidcraft_smlib::sweeps::DraftCorner::default(), false)
+            &SmBrep::extrude(&curves(base, chain)?, a3(n), distance, 0.0, crate::backend::sweeps::DraftCorner::default(), false)
                 .map_err(sm("surface extrude"))?,
             "surface extrude",
         )

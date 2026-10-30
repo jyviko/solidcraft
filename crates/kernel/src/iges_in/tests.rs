@@ -400,7 +400,7 @@ fn trim_pieces_that_miss_their_corner_are_closed_onto_it() {
     assert!(imp.warnings.is_empty(), "{:?}", imp.warnings);
     assert!(imp.bodies[0].closed);
     let body = &imp.bodies[0].body;
-    let check = body.smlib().unwrap().check(solidcraft_smlib::CheckLevel::All).unwrap();
+    let check = body.smlib().unwrap().check(crate::backend::CheckLevel::All).unwrap();
     assert!(check.is_valid(), "{check}");
     for v in &body.record().vertices {
         assert!(v.tolerance <= body.record().tolerance, "a vertex {:?} kept a gap in its tolerance {}", v.point, v.tolerance);

@@ -21,9 +21,9 @@
 //! an edge that is not a whole side of its surface's box (a trimmed edge, whose extension is no
 //! curve SMLib holds exactly), or a body of more than one face.
 
+use crate::backend::trim::Continuation;
 use solidcraft_geom::Vec3;
 use solidcraft_geom::brep::{self, eval::CurveEval};
-use solidcraft_smlib::trim::Continuation;
 
 use crate::body::Body;
 use crate::history::{Change, FaceOrigin};
@@ -183,11 +183,11 @@ fn continued(body: &Body, at: &[Vec3], distance: f64, mode: ExtendMode) -> Resul
     let mut sheet = sb.tagged(0).map_err(|e| failed("tag", e))?;
     for p in at {
         sheet = sheet.extend_sheet([p.x, p.y, p.z], reach, distance, how).map_err(|e| match e {
-            solidcraft_smlib::Error::Unsupported => KernelError::Invalid(
+            crate::backend::Error::Unsupported => KernelError::Invalid(
                 "not supported yet: extending an edge that is not a whole side of its surface's parameter box (a trimmed edge)".into(),
             ),
-            solidcraft_smlib::Error::NotExact => KernelError::Invalid("the extension would run past a pole of its surface or wrap round it".into()),
-            solidcraft_smlib::Error::NoMatch { .. } => KernelError::Invalid(format!("no edge at {p:?}")),
+            crate::backend::Error::NotExact => KernelError::Invalid("the extension would run past a pole of its surface or wrap round it".into()),
+            crate::backend::Error::NoMatch { .. } => KernelError::Invalid(format!("no edge at {p:?}")),
             e => failed("extend", e),
         })?;
     }

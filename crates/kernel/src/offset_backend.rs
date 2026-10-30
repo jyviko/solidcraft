@@ -14,8 +14,8 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use crate::backend::{Brep, CheckLevel, Error as SmError};
 use solidcraft_geom::Vec3;
-use solidcraft_smlib::{Brep, CheckLevel, Error as SmError};
 
 use crate::body::Body;
 use crate::history::{Change, EdgeOrigin, FaceOrigin, History};

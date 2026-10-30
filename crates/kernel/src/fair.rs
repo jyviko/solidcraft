@@ -919,7 +919,7 @@ pub fn fair_faces(body: &Body, faces: &[usize], opts: &FairOptions) -> Result<(B
     if changed.is_empty() {
         return Ok((body.clone(), report));
     }
-    let smlib = solidcraft_smlib::Brep::from_record(&record, true).map_err(|e| KernelError::Failed(format!("fair: SMLib: {e}")))?;
+    let smlib = crate::backend::Brep::from_record(&record, true).map_err(|e| KernelError::Failed(format!("fair: SMLib: {e}")))?;
     let (result, order) = crate::native::body_from_smlib_ordered(&smlib)?;
     // The topology is the body's own, so SMLib's order is the body's: each face kept or
     // modified, each edge kept. Where SMLib's order is not the record's the history is not known.
@@ -1511,7 +1511,7 @@ mod tests {
                 .collect(),
         ];
         let made = assemble(Parts { vertices, edges, faces: vec![PartFace { surface, forward: true, loops }], tolerance: 1e-6 }, false).unwrap();
-        crate::native::body_from_smlib(&solidcraft_smlib::Brep::from_record(&made.brep, true).unwrap()).unwrap()
+        crate::native::body_from_smlib(&crate::backend::Brep::from_record(&made.brep, true).unwrap()).unwrap()
     }
 
     /// Each edge of the body's record: its curve, interval and vertices.

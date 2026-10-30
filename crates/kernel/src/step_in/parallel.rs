@@ -100,7 +100,7 @@ fn placed(body: &Body, m: &M4) -> crate::Result<Body> {
 /// refuses fails with the reason ([`surface_part`] then imports what it can of it).
 pub(super) fn smlib_part(ex: &Exchange, item: u64, units: Units) -> std::result::Result<(Part, Vec<Note>), Failure> {
     let solid = solidcraft_profile::scope("import", "step.read_solid", || {
-        solidcraft_step::topology::read_solid_with(ex, item, units, &solidcraft_smlib::pcurves::SmlibTrims)
+        solidcraft_step::topology::read_solid_with(ex, item, units, &crate::backend::pcurves::SmlibTrims)
     })
     .map_err(|msg| Failure { read: true, msg })?;
     let part = solid_part(&solid)?;
@@ -209,7 +209,7 @@ const MAX_LEFT_OUT_ROUNDS: usize = 8;
 /// With no face to import, the solid stays refused.
 fn surface_part(ex: &Exchange, item: u64, units: Units, refused: Failure) -> std::result::Result<(Part, Vec<Note>), Failure> {
     let _span = solidcraft_profile::span("import", "step.refused_surfaces");
-    let trims = &solidcraft_smlib::pcurves::SmlibTrims;
+    let trims = &crate::backend::pcurves::SmlibTrims;
     let Ok(faces) = solidcraft_step::topology::read_faces_with(ex, item, units, trims) else { return Err(refused) };
     let of_solid: std::collections::HashSet<u64> = faces.iter().map(|f| f.face).collect();
     // The faces left out, each with the refusal that names it, in the order they were found.

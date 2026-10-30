@@ -795,7 +795,7 @@ fn patch_body(body: &Body, record: &b::Brep, chain: &[(usize, bool)], surface: b
     }
     let mut made = assemble(Parts { vertices, edges, faces: vec![PartFace { surface, forward: true, loops: vec![uses] }], tolerance: tol }, false)?;
     hold_gap(&mut made.brep, tol);
-    let smlib = solidcraft_smlib::Brep::from_record(&made.brep, true).map_err(|e| KernelError::Failed(format!("patch: SMLib: {e}")))?;
+    let smlib = crate::backend::Brep::from_record(&made.brep, true).map_err(|e| KernelError::Failed(format!("patch: SMLib: {e}")))?;
     let (patch, order) = crate::native::body_from_smlib_ordered(&smlib)?;
     // The patch's edges in its own order, each from the loop edge it is.
     let Some(order) = order else { return Ok(patch) };
@@ -920,7 +920,7 @@ fn quilt_body(body: &Body, record: &b::Brep, chain: &[Piece], fill: &IsoFill, to
     }
     let mut made = assemble(Parts { vertices, edges, faces, tolerance: tol }, false)?;
     hold_gap(&mut made.brep, tol);
-    let smlib = solidcraft_smlib::Brep::from_record(&made.brep, true).map_err(|e| KernelError::Failed(format!("patch: SMLib: {e}")))?;
+    let smlib = crate::backend::Brep::from_record(&made.brep, true).map_err(|e| KernelError::Failed(format!("patch: SMLib: {e}")))?;
     let (sheet, order) = crate::native::body_from_smlib_ordered(&smlib)?;
     let Some(order) = order else { return Ok(sheet) };
     let place = |list: &[usize], c: usize| if list.is_empty() { Some(c) } else { list.get(c).copied() };
@@ -1302,7 +1302,7 @@ mod tests {
             faces.push(PartFace { surface, forward: true, loops: vec![uses] });
         }
         let made = assemble(Parts { vertices, edges, faces, tolerance: 1e-6 }, false).unwrap();
-        crate::native::body_from_smlib(&solidcraft_smlib::Brep::from_record(&made.brep, true).unwrap()).unwrap()
+        crate::native::body_from_smlib(&crate::backend::Brep::from_record(&made.brep, true).unwrap()).unwrap()
     }
 
     #[test]
@@ -1431,7 +1431,7 @@ mod tests {
             v.point[0] += 2e-5;
             v.tolerance = v.tolerance.max(1e-4);
         }
-        let imported = crate::native::body_from_smlib(&solidcraft_smlib::Brep::from_record(&moved, true).unwrap()).unwrap();
+        let imported = crate::native::body_from_smlib(&crate::backend::Brep::from_record(&moved, true).unwrap()).unwrap();
         let (fill, got) = fill_rim(&imported, &rim);
         check_volume("imported", &solid, &fill, &corners, got);
     }

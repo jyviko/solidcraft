@@ -47,6 +47,9 @@ pub const TABLE: &[(&str, Class)] = &[
     ("sketch", Class::Layer(1)),
     // NVIDIA's SMLib behind its C API (kernel-smlib branch, ADR 0002); only the kernel uses it
     ("smlib", Class::Layer(1)),
+    // solidcore, the pure-Rust port of SMLib, behind smlib's API: the kernel's other backend
+    // (a feature of the kernel); only the kernel uses it
+    ("solidcore", Class::Layer(1)),
     // STEP (ISO 10303) exchange structure and geometry, no modelling backend
     ("step", Class::Layer(1)),
     ("kernel", Class::Layer(1)),
@@ -68,7 +71,8 @@ pub const TABLE: &[(&str, Class)] = &[
 /// Explicit orderings *within* a layer (earlier may be used by later).
 /// The viewport draws display plans the GPU crate evaluates and draws with its pipelines; the MCP
 /// server's tests draw screenshots with them. The kernel reads and writes STEP through `step`.
-pub const INTRA_LAYER_ORDER: &[&[&str]] = &[&["gpu", "ui-egui"], &["gpu", "mcp"], &["smlib", "kernel"], &["step", "kernel"]];
+pub const INTRA_LAYER_ORDER: &[&[&str]] =
+    &[&["gpu", "ui-egui"], &["gpu", "mcp"], &["smlib", "kernel"], &["solidcore", "kernel"], &["step", "kernel"]];
 
 fn intra_layer_allowed(from: &str, to: &str) -> bool {
     let (from, to) = (short_name(from), short_name(to));

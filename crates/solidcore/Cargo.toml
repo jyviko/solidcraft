@@ -1,0 +1,15 @@
+[package]
+name = "solidcraft-solidcore"
+description = "SolidCraft: solidcore (tangency-labs/solidcore, Apache-2.0), the pure-Rust port of NVIDIA's SMLib, behind the same public API as solidcraft-smlib"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+log = { workspace = true }
+solidcore = { workspace = true }
+solidcraft-geom = { workspace = true }

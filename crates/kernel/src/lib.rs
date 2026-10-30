@@ -12,6 +12,17 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
 
+// The backend: exactly one of the features `smlib` and `solidcore`, which give the same API
+// (crates/smlib, crates/solidcore). Every call into it goes through `backend::`.
+#[cfg(all(feature = "smlib", feature = "solidcore"))]
+compile_error!("solidcraft-kernel: the features `smlib` and `solidcore` are two backends; select one");
+#[cfg(not(any(feature = "smlib", feature = "solidcore")))]
+compile_error!("solidcraft-kernel: select a backend, the feature `smlib` (the default) or `solidcore`");
+#[cfg(feature = "smlib")]
+pub(crate) use solidcraft_smlib as backend;
+#[cfg(all(feature = "solidcore", not(feature = "smlib")))]
+pub(crate) use solidcraft_solidcore as backend;
+
 mod assemble;
 mod blend;
 mod blend_corner;
@@ -253,7 +264,7 @@ pub type Result<T> = std::result::Result<T, KernelError>;
 
 /// The native kernel call running right now (SMLib), for crash reports.
 pub fn native_call_in_flight() -> Option<String> {
-    solidcraft_smlib::current_call()
+    crate::backend::current_call()
 }
 
 thread_local! {

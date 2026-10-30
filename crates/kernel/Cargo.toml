@@ -9,14 +9,20 @@ license.workspace = true
 workspace = true
 
 [features]
-# Link NVIDIA's SMLib (tangency-labs/smlib) into the kernel; needs a C++ toolchain and
-# scripts/fetch-smlib.sh (ADR 0002). Without it every geometric operation answers that SMLib
-# was not built.
-smlib = ["solidcraft-smlib/native"]
+default = ["smlib"]
+# The kernel's backend: exactly one of the two (src/lib.rs refuses to build with both or
+# neither). Both give crate::backend the same API.
+# NVIDIA's SMLib (tangency-labs/smlib), linked; needs a C++ toolchain and scripts/fetch-smlib.sh
+# (ADR 0002).
+smlib = ["dep:solidcraft-smlib", "solidcraft-smlib/native"]
+# solidcore (tangency-labs/solidcore), the pure-Rust port of SMLib: it answers what it does not
+# do yet as not supported (crates/solidcore).
+solidcore = ["dep:solidcraft-solidcore"]
 
 [dependencies]
 solidcraft-geom = { workspace = true }
-solidcraft-smlib = { workspace = true }
+solidcraft-smlib = { workspace = true, optional = true }
+solidcraft-solidcore = { workspace = true, optional = true }
 solidcraft-profile = { workspace = true }
 solidcraft-step = { workspace = true }
 serde = { workspace = true }

@@ -7,7 +7,7 @@
 pub(crate) use smlib::{boolean as smlib_boolean, union_all as smlib_union_all};
 
 mod smlib {
-    use solidcraft_smlib::{BooleanOp, CheckLevel};
+    use crate::backend::{BooleanOp, CheckLevel};
 
     use crate::body::Body;
     use crate::history::History;
@@ -49,8 +49,8 @@ mod smlib {
     /// The union of `bodies` in one SMLib call, each tagged as its own operand, checked once:
     /// the result's history is over `bodies` in order. At least one body.
     pub(crate) fn union_all(bodies: &[&Body]) -> Result<Body> {
-        if bodies.len() > solidcraft_smlib::MAX_UNION_BREPS {
-            return Err(KernelError::Invalid(format!("a union takes at most {} bodies", solidcraft_smlib::MAX_UNION_BREPS)));
+        if bodies.len() > crate::backend::MAX_UNION_BREPS {
+            return Err(KernelError::Invalid(format!("a union takes at most {} bodies", crate::backend::MAX_UNION_BREPS)));
         }
         let mut operands = Vec::with_capacity(bodies.len());
         let mut tagged = Vec::with_capacity(bodies.len());
@@ -65,9 +65,9 @@ mod smlib {
                 v
             });
         }
-        let refs: Vec<&solidcraft_smlib::Brep> = tagged.iter().collect();
-        let r = solidcraft_smlib::Brep::union_all(&refs).map_err(|e| failed("operation", e))?;
-        let operand_refs: Vec<&solidcraft_smlib::Brep> = operands.iter().collect();
+        let refs: Vec<&crate::backend::Brep> = tagged.iter().collect();
+        let r = crate::backend::Brep::union_all(&refs).map_err(|e| failed("operation", e))?;
+        let operand_refs: Vec<&crate::backend::Brep> = operands.iter().collect();
         checked(&r, &operand_refs)?;
         let (body, or) = body_from_smlib_ordered(&r)?;
         let history = match (orders, or) {
@@ -81,7 +81,7 @@ mod smlib {
     }
 
     /// An error unless SMLib's check accepts `r`, the result of combining `operands`.
-    fn checked(r: &solidcraft_smlib::Brep, operands: &[&solidcraft_smlib::Brep]) -> Result<()> {
+    fn checked(r: &crate::backend::Brep, operands: &[&crate::backend::Brep]) -> Result<()> {
         // Solids touching each other along an edge or at a vertex come back as one non-manifold
         // body, which the export splits into separate solids: SMLib's check is of those, imported
         // as given (its check of the touching arrangement itself refuses the radial order of
@@ -91,7 +91,7 @@ mod smlib {
             r.check(CheckLevel::All).map_err(|e| failed("check", e))?
         } else {
             let record = r.to_native().map_err(|e| failed("export", e))?;
-            let split = solidcraft_smlib::Brep::from_record(&record, true).map_err(|e| failed("the separate solids", e))?;
+            let split = crate::backend::Brep::from_record(&record, true).map_err(|e| failed("the separate solids", e))?;
             split.check(CheckLevel::All).map_err(|e| failed("check", e))?
         };
         if check.is_valid() {

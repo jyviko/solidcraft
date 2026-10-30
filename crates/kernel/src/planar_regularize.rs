@@ -1,6 +1,6 @@
 //! Exact topological removal of construction-induced planar subdivisions.
 //! Shared edge identity and complete construction lineage select the edges; SMLib joins the
-//! faces either side of them where they are topological (`solidcraft_smlib::Brep::merge_faces`,
+//! faces either side of them where they are topological (`crate::backend::Brep::merge_faces`,
 //! every other edge kept by a point at its middle).
 use super::Body;
 use crate::{KernelError, Result, guard};
@@ -109,7 +109,7 @@ impl Body {
                 .map(|(_, e)| edge_middle(e).map(|p| [p.x, p.y, p.z]))
                 .collect::<Option<_>>()
                 .ok_or_else(|| failed("an edge of the body has no middle point"))?;
-            if keep.len() > solidcraft_smlib::MAX_POINTS {
+            if keep.len() > crate::backend::MAX_POINTS {
                 return Ok(None);
             }
             let (sb, ob) = crate::native::smlib_body_ordered(&self)?;
@@ -118,7 +118,7 @@ impl Body {
             if r.counts().map_err(failed)?.first() == Some(&self.face_count()) {
                 return Ok(None);
             }
-            let check = r.check(solidcraft_smlib::CheckLevel::All).map_err(failed)?;
+            let check = r.check(crate::backend::CheckLevel::All).map_err(failed)?;
             if !check.is_valid() {
                 return Err(failed(format!("SMLib's check refuses the result: {check}")));
             }

@@ -47,7 +47,7 @@ fn smlib_validity(body: &Body) -> Option<SmlibCheck> {
             return Some(if e.contains("not supported yet") { SmlibCheck::NotSupported(e) } else { SmlibCheck::Invalid(e) });
         }
     };
-    Some(match b.check(solidcraft_smlib::CheckLevel::All) {
+    Some(match b.check(crate::backend::CheckLevel::All) {
         Ok(r) if r.is_valid() => SmlibCheck::Valid,
         Ok(r) => SmlibCheck::Invalid(format!("SMLib check: {r}")),
         Err(e) => SmlibCheck::Invalid(format!("SMLib check: {e}")),
@@ -61,15 +61,7 @@ pub fn smlib_built() -> bool {
 
 /// Where every SMLib call that fails from now on leaves its inputs for replay (the C API's
 /// `smlib_set_dump_dir`: the call's arguments and B-reps, which `smlib_brep_read` reads back);
-/// `None` stops it. A build without SMLib makes no calls to dump.
+/// `None` stops it. The solidcore backend has no dumps: it refuses a folder.
 pub fn smlib_dump_dir(dir: Option<&std::path::Path>) -> crate::Result<()> {
-    #[cfg(feature = "smlib")]
-    {
-        solidcraft_smlib::set_dump_dir(dir).map_err(|e| crate::KernelError::Failed(format!("SMLib dump folder: {e}")))
-    }
-    #[cfg(not(feature = "smlib"))]
-    {
-        let _ = dir;
-        Ok(())
-    }
+    crate::backend::set_dump_dir(dir).map_err(|e| crate::KernelError::Failed(format!("SMLib dump folder: {e}")))
 }

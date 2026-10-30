@@ -24,7 +24,7 @@ pub struct Body {
     pub(crate) record: std::sync::Arc<Brep>,
     /// The body in SMLib, built from `record` on first use (or kept from the operation that
     /// made it), shared by clones because they share the record.
-    pub(crate) smlib: std::sync::Arc<std::sync::OnceLock<std::result::Result<solidcraft_smlib::Brep, Refusal>>>,
+    pub(crate) smlib: std::sync::Arc<std::sync::OnceLock<std::result::Result<crate::backend::Brep, Refusal>>>,
     /// Bounding-box diagonal of the vertices, measured when the body was made; 0 means "not
     /// measured, walk the geometry". Every kernel tolerance is a fraction of it.
     pub(crate) size: f64,
@@ -430,11 +430,11 @@ const MAX_REFUSAL_PROBES: usize = 20_000;
 
 impl Refusal {
     /// The refusal of `record` for `error`, with the face SMLib refuses on its own.
-    fn of(record: &Brep, error: &solidcraft_smlib::Error) -> Refusal {
+    fn of(record: &Brep, error: &crate::backend::Error) -> Refusal {
         let _span = solidcraft_profile::span("kernel", "smlib_refusal_face");
         let alone = |f: usize| crate::surfaces::Parts::of(record, &[(f, false)]).and_then(|p| p.canonical()).map(|c| c.brep);
         let face = (record.faces.len() <= MAX_REFUSAL_PROBES)
-            .then(|| (0..record.faces.len()).find(|&f| alone(f).is_ok_and(|r| solidcraft_smlib::Brep::from_record(&r, true).is_err())))
+            .then(|| (0..record.faces.len()).find(|&f| alone(f).is_ok_and(|r| crate::backend::Brep::from_record(&r, true).is_err())))
             .flatten();
         let surface = face.and_then(|f| record.faces.get(f)).map(|f| SurfaceKind::of(&f.surface));
         Refusal { face, surface, why: error.to_string() }
@@ -506,10 +506,10 @@ impl Body {
     /// The body in SMLib, built from its record the first time it is asked for. The record is
     /// SMLib's own form (`SmBrepData`), imported as given: a record SMLib refuses is an error that
     /// names why, never repaired here.
-    pub fn smlib(&self) -> Result<&solidcraft_smlib::Brep> {
+    pub fn smlib(&self) -> Result<&crate::backend::Brep> {
         self.require_brep("an SMLib operation")?;
         self.smlib
-            .get_or_init(|| solidcraft_smlib::Brep::from_record(&self.record, true).map_err(|e| Refusal::of(&self.record, &e)))
+            .get_or_init(|| crate::backend::Brep::from_record(&self.record, true).map_err(|e| Refusal::of(&self.record, &e)))
             .as_ref()
             .map_err(|r| KernelError::Failed(format!("SMLib: {}", r.why)))
     }

@@ -8,6 +8,12 @@ license.workspace = true
 [lints]
 workspace = true
 
+[features]
+default = ["smlib"]
+# The kernel's backend (solidcraft-engine): one of the two, as the apps pass it down (crates/kernel).
+smlib = ["solidcraft-engine/smlib"]
+solidcore = ["solidcraft-engine/solidcore"]
+
 [dependencies]
 solidcraft-engine = { workspace = true }
 serde_json = { workspace = true }

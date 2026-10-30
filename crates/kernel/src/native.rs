@@ -85,7 +85,7 @@ pub fn brep_record(body: &Body) -> Result<solidcraft_geom::brep::Brep> {
 }
 
 /// The body in SMLib (see [`Body::smlib`]), as an owned copy.
-pub fn smlib_body(body: &Body) -> Result<solidcraft_smlib::Brep> {
+pub fn smlib_body(body: &Body) -> Result<crate::backend::Brep> {
     let _span = solidcraft_profile::span("kernel", "smlib_body");
     body.smlib()?.try_clone().map_err(|e| KernelError::Failed(format!("SMLib: {e}")))
 }
@@ -122,14 +122,14 @@ pub fn decode_native_body(bytes: &[u8]) -> Result<Body> {
 
 /// An SMLib body as a kernel body: SMLib's export mapped by `solidcraft_smlib` (canonical order,
 /// radians, pcurves) is the body's record ([`Body::from_smlib_record`]).
-pub fn body_from_smlib(brep: &solidcraft_smlib::Brep) -> Result<Body> {
+pub fn body_from_smlib(brep: &crate::backend::Brep) -> Result<Body> {
     let _span = solidcraft_profile::span("kernel", "body_from_smlib");
     body_from_smlib_ordered(brep).map(|(body, _)| body)
 }
 
 /// [`body_from_smlib`], with where each of SMLib's faces and edges is in the body's face and
 /// edge order ([`crate::history`]).
-pub(crate) fn body_from_smlib_ordered(brep: &solidcraft_smlib::Brep) -> Result<(Body, Option<solidcraft_smlib::history::Order>)> {
+pub(crate) fn body_from_smlib_ordered(brep: &crate::backend::Brep) -> Result<(Body, Option<crate::backend::history::Order>)> {
     let _span = solidcraft_profile::span("kernel", "body_from_smlib_ordered");
     let (record, order) = brep.to_native_ordered().map_err(|e| KernelError::Failed(e.to_string()))?;
     Ok((Body::from_smlib_record(record)?, Some(order)))
@@ -138,25 +138,23 @@ pub(crate) fn body_from_smlib_ordered(brep: &solidcraft_smlib::Brep) -> Result<(
 /// `body` in SMLib, with where each of SMLib's faces and edges is in the body's face and edge
 /// order: SMLib's export of the imported body, checked to number every face, edge and vertex as
 /// the body's record does. `None` where it does not.
-pub(crate) fn smlib_body_ordered(body: &Body) -> Result<(solidcraft_smlib::Brep, Option<solidcraft_smlib::history::Order>)> {
+pub(crate) fn smlib_body_ordered(body: &Body) -> Result<(crate::backend::Brep, Option<crate::backend::history::Order>)> {
     let brep = smlib_body(body)?;
     Ok((brep.try_clone().map_err(|e| KernelError::Failed(format!("SMLib: {e}")))?, numbering(body.record(), &brep)))
 }
 
 /// `record` in SMLib, imported as given (SMLib's own form; a record it refuses is an error that
 /// names why), with where each of SMLib's faces and edges is in the record's order.
-pub(crate) fn smlib_record_ordered(
-    record: &solidcraft_geom::brep::Brep,
-) -> Result<(solidcraft_smlib::Brep, Option<solidcraft_smlib::history::Order>)> {
+pub(crate) fn smlib_record_ordered(record: &solidcraft_geom::brep::Brep) -> Result<(crate::backend::Brep, Option<crate::backend::history::Order>)> {
     let _span = solidcraft_profile::span("kernel", "smlib_record_ordered");
-    let brep = solidcraft_smlib::Brep::from_record(record, true).map_err(|e| KernelError::Failed(format!("SMLib: {e}")))?;
+    let brep = crate::backend::Brep::from_record(record, true).map_err(|e| KernelError::Failed(format!("SMLib: {e}")))?;
     let order = numbering(record, &brep);
     Ok((brep, order))
 }
 
 /// Where SMLib's faces and edges of `brep` (imported from `record`) are in the record's order:
 /// `None` where SMLib's export does not number them as the record does.
-fn numbering(record: &solidcraft_geom::brep::Brep, brep: &solidcraft_smlib::Brep) -> Option<solidcraft_smlib::history::Order> {
+fn numbering(record: &solidcraft_geom::brep::Brep, brep: &crate::backend::Brep) -> Option<crate::backend::history::Order> {
     match brep.to_native_ordered() {
         Ok((back, order)) => same_numbering(record, &back).then_some(order),
         Err(e) => {

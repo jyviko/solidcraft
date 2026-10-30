@@ -10,8 +10,8 @@
 //! own edges. The body goes to SMLib tagged as operand 0, so the result's history comes from
 //! SMLib's tags: the untrimmed face is the face it was, trimmed differently.
 
+use crate::backend::trim::Holes;
 use solidcraft_geom::Vec3;
-use solidcraft_smlib::trim::Holes;
 
 use crate::body::Body;
 use crate::history::{Change, FaceOrigin};
@@ -80,8 +80,8 @@ pub fn untrim(body: &Body, face: usize, holes: UntrimHoles, outer: bool, in_plac
     // inside it.
     let reach = size * 0.05 + 1e-6;
     let r = tagged.untrim_face([at.x, at.y, at.z], reach, which, outer, in_place).map_err(|e| match e {
-        solidcraft_smlib::Error::NoMatch { .. } => KernelError::Invalid("no hole of the face at a picked point".into()),
-        solidcraft_smlib::Error::Unsupported => {
+        crate::backend::Error::NoMatch { .. } => KernelError::Invalid("no hole of the face at a picked point".into()),
+        crate::backend::Error::Unsupported => {
             KernelError::Failed("not supported yet: untrimming this face in place (another face uses its hole's edges)".into())
         }
         e => failed("untrim", e),

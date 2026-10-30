@@ -9,6 +9,10 @@ license.workspace = true
 workspace = true
 
 [features]
+default = ["smlib"]
+# The kernel's backend (solidcraft-kernel, solidcraft-doc): one of the two, as the apps pass it down (crates/kernel).
+smlib = ["solidcraft-kernel/smlib", "solidcraft-doc/smlib"]
+solidcore = ["solidcraft-kernel/solidcore", "solidcraft-doc/solidcore"]
 # Tests only: trust a model cache even when the build has no git commit.
 trust-unknown-source = []
 

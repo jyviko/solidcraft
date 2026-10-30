@@ -376,7 +376,7 @@ fn closed_display_mesh(name: &str, b: &Body, tol: f64) -> Mesh {
 #[cfg(feature = "smlib")]
 #[test]
 fn a_half_sphere_from_smlib_is_closed_along_its_seam() {
-    use solidcraft_smlib::{BooleanOp, Brep as S};
+    use crate::backend::{BooleanOp, Brep as S};
     let Ok(ball) = S::make_sphere([0.0; 3], 12.0) else { panic!("sphere") };
     let Ok(lid) = S::make_box([-20.0, -20.0, 0.0], [40.0, 40.0, 20.0]) else { panic!("box") };
     let Ok(Some(half)) = ball.boolean(&lid, BooleanOp::Subtract) else { panic!("cut") };
@@ -409,7 +409,7 @@ fn display_plans_stay_within_the_chord_tolerance() {
 #[cfg(feature = "smlib")]
 #[test]
 fn an_smlib_torus_stays_within_the_chord_tolerance() {
-    let Ok(ring) = solidcraft_smlib::Brep::make_torus([0.0; 3], 22.0, 4.0) else { panic!("torus") };
+    let Ok(ring) = crate::backend::Brep::make_torus([0.0; 3], 22.0, 4.0) else { panic!("torus") };
     let body = ok(crate::native::body_from_smlib(&ring));
     for tol in [0.1, 0.01] {
         let m = closed_display_mesh("SMLib torus", &body, tol);
@@ -425,7 +425,7 @@ fn an_smlib_torus_stays_within_the_chord_tolerance() {
 /// A groove of trapezoid `section` (radius, axial offset) in the plane through the z axis along
 /// y, carried `turns` turns of `pitch` about z from `base`, as an SMLib solid.
 #[cfg(feature = "smlib")]
-fn smlib_groove(section: [(f64, f64); 4], base: f64, pitch: f64, turns: f64) -> solidcraft_smlib::Brep {
+fn smlib_groove(section: [(f64, f64); 4], base: f64, pitch: f64, turns: f64) -> crate::backend::Brep {
     use solidcraft_geom::{Loop2, Vec2};
     smlib_screw(Loop2::polygon(&section.map(|(r, z)| Vec2::new(r, z))), base, pitch, turns)
 }
@@ -433,7 +433,7 @@ fn smlib_groove(section: [(f64, f64); 4], base: f64, pitch: f64, turns: f64) -> 
 /// The `section` (radius, axial offset) in the plane through the z axis along y, carried
 /// `turns` turns of `pitch` about z from `base`, as an SMLib solid.
 #[cfg(feature = "smlib")]
-fn smlib_screw(section: solidcraft_geom::Loop2, base: f64, pitch: f64, turns: f64) -> solidcraft_smlib::Brep {
+fn smlib_screw(section: solidcraft_geom::Loop2, base: f64, pitch: f64, turns: f64) -> crate::backend::Brep {
     use solidcraft_geom::{Plane, Region2};
     let origin = Vec3::new(0.0, 0.0, base);
     let plane = Plane { origin, x: Vec3::Y, y: Vec3::Z };
@@ -445,8 +445,8 @@ fn smlib_screw(section: solidcraft_geom::Loop2, base: f64, pitch: f64, turns: f6
 }
 
 #[cfg(feature = "smlib")]
-fn smlib_cut(a: &solidcraft_smlib::Brep, b: &solidcraft_smlib::Brep) -> solidcraft_smlib::Brep {
-    match a.boolean(b, solidcraft_smlib::BooleanOp::Subtract) {
+fn smlib_cut(a: &crate::backend::Brep, b: &crate::backend::Brep) -> crate::backend::Brep {
+    match a.boolean(b, crate::backend::BooleanOp::Subtract) {
         Ok(Some(r)) => r,
         other => panic!("cut: {other:?}"),
     }
@@ -533,7 +533,7 @@ fn assert_faces_lie_flat(name: &str, plan: &solidcraft_geom::tess::TessPlan, tol
 #[cfg(feature = "smlib")]
 #[test]
 fn a_modelled_thread_in_a_bore_meshes_inside_its_block() {
-    use solidcraft_smlib::Brep as S;
+    use crate::backend::Brep as S;
     let (Ok(block), Ok(bore)) = (S::make_box([-10.0, -10.0, 0.0], [20.0, 20.0, 10.0]), S::make_cylinder([0.0, 0.0, -1.0], 3.5, 12.0)) else {
         panic!("stock")
     };
@@ -565,7 +565,7 @@ fn a_modelled_thread_in_a_bore_meshes_inside_its_block() {
 #[cfg(feature = "smlib")]
 #[test]
 fn a_thread_root_band_running_out_through_an_end_face_lies_on_its_surface() {
-    let Ok(shaft) = solidcraft_smlib::Brep::make_cylinder([0.0; 3], 5.0, 30.0) else { panic!("shaft") };
+    let Ok(shaft) = crate::backend::Brep::make_cylinder([0.0; 3], 5.0, 30.0) else { panic!("shaft") };
     let threaded = smlib_cut(&shaft, &smlib_groove(iso_groove(1.5, 10.0, 5.0, false), -1.5, 1.5, 11.0));
     let body = ok(crate::native::body_from_smlib(&threaded));
     let m = ok(body.mesh(&crate::MeshTolerance::chord(0.01)));
@@ -590,8 +590,8 @@ fn a_thread_root_band_running_out_through_an_end_face_lies_on_its_surface() {
 #[cfg(feature = "smlib")]
 #[test]
 fn the_halves_of_a_split_smlib_coil_measure_as_the_whole() {
+    use crate::backend::{BooleanOp, Brep as S};
     use solidcraft_geom::{Loop2, Vec2};
-    use solidcraft_smlib::{BooleanOp, Brep as S};
     let coil = smlib_screw(Loop2::circle(Vec2::new(20.0, 0.0), 1.0), 0.0, 4.0, 6.0);
     let Ok(top) = S::make_box([-30.0, -30.0, 12.5], [60.0, 60.0, 30.0]) else { panic!("box") };
     let (Ok(Some(upper)), Ok(Some(lower))) = (coil.boolean(&top, BooleanOp::Intersect), coil.boolean(&top, BooleanOp::Subtract)) else {

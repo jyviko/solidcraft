@@ -8,6 +8,12 @@ license.workspace = true
 [lints]
 workspace = true
 
+[features]
+default = ["smlib"]
+# The kernel's backend (solidcraft-kernel): one of the two, as the apps pass it down (crates/kernel).
+smlib = ["solidcraft-kernel/smlib"]
+solidcore = ["solidcraft-kernel/solidcore"]
+
 [dependencies]
 solidcraft-geom = { workspace = true }
 solidcraft-sketch = { workspace = true }
