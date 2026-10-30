@@ -19,6 +19,7 @@ mod bvh;
 pub mod catmull_rom;
 mod chain;
 pub mod compare;
+pub mod ellipsoid;
 pub mod env;
 pub mod fill;
 pub mod fill_general;
