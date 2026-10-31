@@ -2,5 +2,4 @@
 # rig gate (.github/workflows/kernel-rig.yml) fails on a case that fails and is not listed here,
 # and on a listed case that passes: a fix removes its line in the same pull request.
 # Baseline: 45f69c0e5 with SMLib 60b1c6a, aarch64 Linux.
-616-shell-open-a-rib-side-face-of-a-lid SMLib status 1001
 cov-shell-again-open-at-an-inner-wall-of-a-shelled-box SMLib status 1001
