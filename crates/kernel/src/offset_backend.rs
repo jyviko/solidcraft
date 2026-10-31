@@ -97,11 +97,63 @@ pub(crate) fn shell(b: &Body, open: &[Vec3], thickness: f64) -> Result<Body> {
     }
     let picked = faces_under(b, open)?;
     let opened = crate::offset::with_same_surface(b, &picked);
+    opening_has_a_rim(b, &opened, thickness)?;
     let tol = pick_tolerance(b);
     let pts = points(&face_points(b, &opened)?);
     let (r, h) = run("shell", b, Some(thickness), |s| s.shell(&pts, tol, -thickness))?;
     let h = h.and_then(|h| with_offsets(&r, b, h, thickness));
     Ok(r.with_checked_history(h, &record::counts(&[b])))
+}
+
+/// Refuses a shell whose opening would have no rim: a round beside an open face that reaches as
+/// far into it as the wall is thick, or farther, so the cavity's wall meets the open face at or
+/// past the round's contact with it and the shell breaks through the part there (the owner's rule
+/// of 2026-10-31: a shell or blend that breaks through the part is refused, naming why).
+///
+/// Decided exactly, as [`crate::blend::rounds_into_hollow`] decides a round's opening: the round
+/// is a face tangent all along a straight edge of a planar open face, and tangent along another
+/// of its edges to a planar wall that is not open and not parallel to the open face (a round
+/// between a box's bottom and side). The wall's offset, the cavity's wall, is its plane moved
+/// `thickness` into the body. The round's contact with the open face, the edge, lies a depth d
+/// into the body from the wall's plane at its ends (the same all along it, the edge being
+/// parallel to the wall where the round is tangent to both); the open face's rim runs from the
+/// contact to the cavity's wall, `thickness` from the side, so it has material only where
+/// d < thickness.
+fn opening_has_a_rim(b: &Body, opened: &[usize], thickness: f64) -> Result<()> {
+    let rec = crate::blend::Faces::of(b)?;
+    let smooth = |e: usize| crate::tangent_edge::tangent_all_along(&rec.rec, |f| rec.side(f), e, crate::smooth_edges::ANGLE);
+    let other = |e: usize, f: usize| rec.faces_of(e).into_iter().map(|x| x as usize).find(|&x| x != f);
+    for &open in opened {
+        let Some(n_open) = rec.plane_normal(open) else { continue };
+        for contact in rec.uses(open).map(|u| u.edge as usize) {
+            let Some(round) = other(contact, open) else { continue };
+            if !rec.straight(contact) || rec.plane_normal(round).is_some() || opened.contains(&round) || !smooth(contact)? {
+                continue;
+            }
+            let Some((p, q)) = rec.ends(contact) else { continue };
+            let tolerance = rec.rec.edges.get(contact).map_or(0.0, |x| x.tolerance).max(rec.rec.tolerance).max(1e-9);
+            for side in rec.uses(round).map(|u| u.edge as usize).filter(|&e| e != contact) {
+                let Some(wall) = other(side, round) else { continue };
+                let Some(n) = rec.plane_normal(wall) else { continue };
+                let Some((on_wall, _)) = rec.ends(side) else { continue };
+                if wall == open || opened.contains(&wall) || n.dot(n_open).abs() > 1.0 - 1e-9 || !smooth(side)? {
+                    continue;
+                }
+                let depth = n.dot(on_wall - p).min(n.dot(on_wall - q));
+                if !(depth.is_finite() && depth > tolerance) || depth < thickness - tolerance {
+                    continue;
+                }
+                let at = (p + q) * 0.5;
+                return Err(KernelError::Invalid(format!(
+                    "shell: the rim around the opening would have no material: the round beside the open face meets it {depth:.3} mm in \
+                     from the side at ({:.3}, {:.3}, {:.3}), at or past the {thickness} mm wall, so the shell would break through the \
+                     part there; use a wall thicker than {depth:.3} mm or a round smaller than {thickness} mm",
+                    at.x, at.y, at.z
+                )));
+            }
+        }
+    }
+    Ok(())
 }
 
 /// [`crate::offset_faces`] through SMLib: the faces `chosen` (indices in `b`'s face order)

@@ -573,6 +573,21 @@ mod smlib {
         assert!(e.contains("the 1.5 mm walls would meet along a line"), "{e}");
     }
 
+    /// tangency-labs/solidcraft#316: a 40 x 30 x 10 box, its bottom outline rounded, shelled 2
+    /// open at the bottom. The open bottom's rim runs from the round's contact (r in from the
+    /// side) to the cavity's wall (2 in): a round as large as the wall or larger leaves it no
+    /// material, and the shell is refused naming the rim; a smaller round builds.
+    #[test]
+    fn a_shell_whose_opening_has_no_rim_is_refused_naming_the_rim() {
+        let bottom = [Vec3::new(20.0, 0.0, 0.0), Vec3::new(40.0, 15.0, 0.0), Vec3::new(20.0, 30.0, 0.0), Vec3::new(0.0, 15.0, 0.0)];
+        let rounded = |r: f64| crate::fillet(&box_solid(Vec3::ZERO, Vec3::new(40.0, 30.0, 10.0)).unwrap(), &bottom, r).unwrap();
+        for r in [2.0, 2.4] {
+            let e = offset_backend::shell(&rounded(r), &[Vec3::new(20.0, 15.0, 0.0)], 2.0).unwrap_err().to_string();
+            assert!(e.contains("the rim around the opening would have no material") && e.contains(&format!("{r:.3} mm in")), "{r}: {e}");
+        }
+        offset_backend::shell(&rounded(1.5), &[Vec3::new(20.0, 15.0, 0.0)], 2.0).unwrap();
+    }
+
     #[test]
     fn offset_moves_a_face() {
         let b = ell();

@@ -78,7 +78,7 @@ impl Faces {
     }
 
     /// The side of the face in its shell: 1 where its outward normal is its surface's natural one.
-    fn side(&self, f: usize) -> Option<f64> {
+    pub(crate) fn side(&self, f: usize) -> Option<f64> {
         self.forward.get(f).copied().flatten().map(|fw| if fw { 1.0 } else { -1.0 })
     }
 
