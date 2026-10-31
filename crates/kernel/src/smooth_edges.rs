@@ -430,9 +430,13 @@ mod tests {
         assert!(classify(&body, &mesh, 0).0.iter().all(|f| !*f));
     }
 
-    /// A G2 corner patch's sides are G2 to their rounds except near the faces they end on, and
-    /// SMLib holds each side as two edges: the side is one join, drawn whole, not up to the
-    /// vertex in its middle where the G2 half begins (the 20 mm box's r3 corner).
+    /// A G2 corner's patches meet each round along its section, which SMLib holds as two edges
+    /// (the section split at its middle, where two patches meet): the join is one, both its edges
+    /// alike, not up to the vertex in its middle (the 20 mm box's r3 corner). The patches are G2
+    /// to the round along the whole section, its ends included, so the join lies inside one
+    /// smooth surface and both edges are left out of the shaded view. The patches are the six
+    /// faces about the corner's centre; the rounds, eased into their curvature-continuous
+    /// sections before the setback, are the curved faces beside them.
     #[test]
     fn a_seam_split_in_two_edges_is_drawn_whole() {
         let body = crate::box_solid(Vec3::ZERO, Vec3::new(20., 20., 20.)).unwrap();
@@ -440,18 +444,28 @@ mod tests {
         let g2 = crate::fillet_g2_corners(&body, &picks, 3., &[]).unwrap();
         let mesh = g2.mesh(&crate::MeshTolerance::chord(0.02)).unwrap();
         let rec = crate::native::brep_record(&g2).unwrap();
-        let patch = rec
-            .faces
+        let mut at_vertex: Vec<std::collections::BTreeSet<u32>> = vec![Default::default(); rec.vertices.len()];
+        for e in &rec.edges {
+            for v in e.vertices {
+                at_vertex[v as usize].extend(e.uses.iter().map(|u| u.face));
+            }
+        }
+        let patches = at_vertex.iter().find(|f| f.len() == 6).expect("the patches' centre").clone();
+        let plane = |f: u32| matches!(rec.faces[f as usize].surface, Surface::Plane { .. } | Surface::PlaneThrough { .. });
+        let rounds: std::collections::BTreeSet<u32> = rec
+            .edges
             .iter()
-            .position(|f| !matches!(f.surface, Surface::Plane { .. } | Surface::PlaneThrough { .. } | Surface::Cylinder { .. }))
-            .unwrap() as u32;
-        let rounds: Vec<u32> = (0..rec.faces.len() as u32).filter(|f| matches!(rec.faces[*f as usize].surface, Surface::Cylinder { .. })).collect();
+            .filter(|e| e.uses.iter().any(|u| patches.contains(&u.face)))
+            .flat_map(|e| e.uses.iter().map(|u| u.face))
+            .filter(|f| !patches.contains(f) && !plane(*f))
+            .collect();
         assert_eq!(rounds.len(), 3);
         for round in rounds {
-            let side: Vec<usize> =
-                (0..mesh.edges.len()).filter(|e| mesh.edge_faces[*e].contains(&patch) && mesh.edge_faces[*e].contains(&round)).collect();
+            let side: Vec<usize> = (0..mesh.edges.len())
+                .filter(|e| mesh.edge_faces[*e].contains(&round) && mesh.edge_faces[*e].iter().any(|f| patches.contains(f)))
+                .collect();
             assert_eq!(side.len(), 2, "SMLib splits the side in two: {side:?}");
-            assert!(side.iter().all(|e| mesh.shaded_edge_visible(*e)), "the side to round {round} is drawn whole: {side:?}");
+            assert!(side.iter().all(|e| !mesh.shaded_edge_visible(*e)), "the side to round {round} is one smooth join: {side:?}");
         }
     }
 
