@@ -344,24 +344,23 @@ fn a_mixed_convexity_corner_is_refused() {
 }
 
 /// Curvature-continuous rounds (`fillet_g2`, equivalent radius 5) of the three edges at the box
-/// corner: SMLib's own corner between them is its setback corner, whose fill for curvature
-/// sections meets the rounds and faces curvature-continuously (SmBlendSetback.h: G2 for an order
-/// 2 section), as the G2 patch filled between the curvature rounds' setback sections does: each
-/// one closed valid solid, curvature-continuous across every seam round the corner clear of the
-/// hole's corners.
+/// corner: SMLib's own corner between them, and its setback corner set back 7.5 (1.5 r)
+/// (`fillet_g2_setback`), each fill curvature-continuous to the rounds' order-2 sections and the
+/// faces (SmBlendSetback.h: G2 for an order 2 section). Each is one closed valid solid,
+/// curvature-continuous across every seam round the corner clear of the hole's corners, and they
+/// differ only within the setback cube (side 7.5) at the corner.
 #[test]
 fn curvature_rounds_meet_at_a_g2_corner() {
     let (body, edges) = box_corner();
-    let smlib_corner = fillet_g2(&body, &edges, 5.0).unwrap();
-    let g2 = fillet_g2_with_g2_corners(&body, &edges, 5.0, &[]).unwrap();
-    assert!(g2.validity().is_empty(), "{:?}", g2.validity());
-    let v = crate::validity::validity(&g2);
-    assert!(v.ok(), "{:?}", v);
-    let (_, clear, n) = corner_seams(&g2, 0.15);
-    let (_, smlib_clear, smlib_n) = corner_seams(&smlib_corner, 0.15);
-    assert!(n > 0 && clear <= CURVATURE_SHARE / 5.0, "{clear} over {n} stations");
-    assert!(smlib_n > 0 && smlib_clear <= CURVATURE_SHARE / 5.0, "SMLib's own corner: {smlib_clear} over {smlib_n} stations");
-    // Both differ only within the setback cube (side 1.5 r = 7.5) at the corner.
-    let (a, b) = (measure(&g2).unwrap().volume, measure(&smlib_corner).unwrap().volume);
+    let own = fillet_g2(&body, &edges, 5.0).unwrap();
+    let set_back = fillet_g2_setback(&body, &edges, 5.0, &[(Vec3::new(60.0, 40.0, 20.0), 7.5)]).unwrap();
+    for (what, b) in [("own", &own), ("set back", &set_back)] {
+        assert!(b.validity().is_empty(), "{what}: {:?}", b.validity());
+        let v = crate::validity::validity(b);
+        assert!(v.ok(), "{what}: {:?}", v);
+        let (_, clear, n) = corner_seams(b, 0.15);
+        assert!(n > 0 && clear <= CURVATURE_SHARE / 5.0, "{what}: {clear} over {n} stations");
+    }
+    let (a, b) = (measure(&set_back).unwrap().volume, measure(&own).unwrap().volume);
     assert!((a - b).abs() < 7.5f64.powi(3), "{a} vs {b}");
 }

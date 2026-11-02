@@ -351,20 +351,29 @@ fn setback_minimum(faces: &Faces, vertex: u32, radius: f64) -> Option<f64> {
 /// where the rounds would meet, a hole that is no height field over its plane or a patch that
 /// does not meet its neighbours within the tolerances.
 pub fn fillet_g2_corners(body: &Body, edges: &[Vec3], radius: f64, setbacks: &[(Vec3, f64)]) -> Result<Body> {
-    g2_corners(body, edges, radius, setbacks, false)
+    g2_corners(body, edges, radius, setbacks)
 }
 
-/// [`fillet_g2`] (curvature-continuous sections) whose corners where three or more rounded edges
-/// meet are G2 patches, as [`fillet_g2_corners`] builds them: SMLib's own patch at such a corner
-/// is only tangent to the rounds (its curvature jumps across their seams), which no
-/// curvature-continuous fillet may leave. Without such a corner this is [`fillet_g2`]. Refused
-/// as [`fillet_g2_corners`] is.
-pub fn fillet_g2_with_g2_corners(body: &Body, edges: &[Vec3], radius: f64, setbacks: &[(Vec3, f64)]) -> Result<Body> {
-    g2_corners(body, edges, radius, setbacks, true)
+/// [`fillet_g2`] (curvature-continuous sections) with corner setbacks: each `(at, distance)` sets
+/// back the corner at the vertex nearest `at`, as [`fillet_setback`] does, and SMLib's setback
+/// corner fills it curvature-continuously to the rounds and the faces round it; the other corners
+/// are SMLib's own, as [`fillet_g2`] builds them. Without setbacks this is [`fillet_g2`]. Refused
+/// as [`fillet_setback`] is.
+pub fn fillet_g2_setback(body: &Body, edges: &[Vec3], radius: f64, setbacks: &[(Vec3, f64)]) -> Result<Body> {
+    if setbacks.is_empty() {
+        return fillet_g2(body, edges, radius);
+    }
+    let _span = solidcraft_profile::span("kernel", "fillet_g2_setback");
+    body.require_brep("fillet")?;
+    if !(radius.is_finite() && radius > 1e-6 && radius < 1e6) {
+        return Err(KernelError::Invalid("G2 fillet size must be positive and finite".into()));
+    }
+    setbacks_reach(body, edges, radius, setbacks)?;
+    crate::blend_smlib::fillet_g2_setback(body, edges, radius, setbacks).and_then(|b| closed(body, b))
 }
 
-/// [`fillet_g2_corners`] (circular sections) or [`fillet_g2_with_g2_corners`] (`curvature`).
-fn g2_corners(body: &Body, edges: &[Vec3], radius: f64, setbacks: &[(Vec3, f64)], curvature: bool) -> Result<Body> {
+/// [`fillet_g2_corners`]: circular sections, each corner a fitted G2 patch.
+fn g2_corners(body: &Body, edges: &[Vec3], radius: f64, setbacks: &[(Vec3, f64)]) -> Result<Body> {
     let _span = solidcraft_profile::span("kernel", "fillet_g2_corners");
     body.require_brep("fillet")?;
     if !(radius.is_finite() && radius > 0.0) {
@@ -400,7 +409,7 @@ fn g2_corners(body: &Body, edges: &[Vec3], radius: f64, setbacks: &[(Vec3, f64)]
         corners.push(p);
     }
     if corners.is_empty() {
-        return if curvature { fillet_g2(body, edges, radius) } else { fillet(body, edges, radius) };
+        return fillet(body, edges, radius);
     }
     // Each corner's setback: the one given at its vertex, else the default.
     let reach = body.size() * 0.05 + 1e-3;
@@ -425,7 +434,7 @@ fn g2_corners(body: &Body, edges: &[Vec3], radius: f64, setbacks: &[(Vec3, f64)]
     }
     let set_back: Vec<(Vec3, f64)> = corners.iter().copied().zip(distance).collect();
     setbacks_reach(body, edges, radius, &set_back)?;
-    let open = crate::blend_smlib::fillet_setback_open(body, edges, radius, &set_back, curvature)?;
+    let open = crate::blend_smlib::fillet_setback_open(body, edges, radius, &set_back)?;
     let mut patches = Vec::with_capacity(open.holes.len());
     for hole in &open.holes {
         let (patch, _) = crate::corner_g2::corner_patch(&open.sheet, hole, radius)?;

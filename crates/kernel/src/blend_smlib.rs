@@ -46,7 +46,14 @@ pub(crate) fn fillet_each(body: &Body, edges: &[Vec3], radii: &[f64]) -> Result<
 /// A constant-radius round whose corners at `setbacks` (a point at each corner's vertex, and the
 /// distance its patch starts along each edge there) are set back ([`crate::fillet_setback`]).
 pub(crate) fn fillet_setback(body: &Body, edges: &[Vec3], radius: f64, setbacks: &[(Vec3, f64)]) -> Result<Body> {
-    imp::blend_setback(body, edges, &vec![radius; edges.len()], setbacks)
+    imp::blend_setback(body, Kind::Round, edges, &vec![radius; edges.len()], setbacks)
+}
+
+/// Curvature-continuous rounds ([`fillet_g2`]) whose corners at `setbacks` are set back, as
+/// [`fillet_setback`] sets them: SMLib's setback corner, its fill curvature-continuous to the
+/// rounds' order-2 sections ([`crate::fillet_g2_setback`]).
+pub(crate) fn fillet_g2_setback(body: &Body, edges: &[Vec3], radius: f64, setbacks: &[(Vec3, f64)]) -> Result<Body> {
+    imp::blend_setback(body, Kind::Curvature, edges, &vec![radius; edges.len()], setbacks)
 }
 
 /// A set-back blend whose corners SMLib leaves open ([`fillet_setback_open`]): the sheet, its
@@ -61,10 +68,8 @@ pub(crate) struct OpenCorners {
 /// [`fillet_setback`] with each set-back corner left open: SMLib builds the rounds up to the
 /// corners' setback sections and the curves on the faces between them, and leaves out the patch
 /// that would fill each corner, for the caller to fill.
-/// `curvature`: the rounds' sections are curvature-continuous ([`fillet_g2`]), else circular.
-pub(crate) fn fillet_setback_open(body: &Body, edges: &[Vec3], radius: f64, setbacks: &[(Vec3, f64)], curvature: bool) -> Result<OpenCorners> {
-    let kind = if curvature { Kind::Curvature } else { Kind::Round };
-    imp::blend_setback_open(body, kind, edges, &vec![radius; edges.len()], setbacks)
+pub(crate) fn fillet_setback_open(body: &Body, edges: &[Vec3], radius: f64, setbacks: &[(Vec3, f64)]) -> Result<OpenCorners> {
+    imp::blend_setback_open(body, edges, &vec![radius; edges.len()], setbacks)
 }
 
 /// Curvature-continuous rounds with the setback of a round of `radius` ([`crate::fillet_g2`]).
@@ -273,7 +278,7 @@ mod imp {
 
     /// Rounds with corner setbacks: each corner point picks the body's nearest vertex (within
     /// the pick tolerance), handed to SMLib at that vertex's own position.
-    pub(super) fn blend_setback(body: &Body, edges: &[Vec3], sizes: &[f64], setbacks: &[(Vec3, f64)]) -> Result<Body> {
+    pub(super) fn blend_setback(body: &Body, kind: Kind, edges: &[Vec3], sizes: &[f64], setbacks: &[(Vec3, f64)]) -> Result<Body> {
         let what = "fillet with corner setbacks";
         body.require_brep(what)?;
         sizes_ok(what, sizes)?;
@@ -291,13 +296,15 @@ mod imp {
         let distances: Vec<f64> = setbacks.iter().map(|(_, d)| *d).collect();
         let tol = pick_tolerance(body);
         let at: Vec<Vec3> = setbacks.iter().map(|(p, _)| *p).collect();
-        run_with(body, what, &picked.edges, &at, |b| b.blend_setback(Blend::Round, &picked.points, sizes, &corners, &distances, tol).map(|r| (r, ())))
-            .map(|(out, (), _)| out)
-            .map_err(|e| crate::blend::with_continuation(e, next))
+        run_with(body, what, &picked.edges, &at, |b| {
+            b.blend_setback(blend_kind(kind), &picked.points, sizes, &corners, &distances, tol).map(|r| (r, ()))
+        })
+        .map(|(out, (), _)| out)
+        .map_err(|e| crate::blend::with_continuation(e, next))
     }
 
     /// [`blend_setback`] with the set-back corners left open (`super::OpenCorners`).
-    pub(super) fn blend_setback_open(body: &Body, kind: Kind, edges: &[Vec3], sizes: &[f64], setbacks: &[(Vec3, f64)]) -> Result<super::OpenCorners> {
+    pub(super) fn blend_setback_open(body: &Body, edges: &[Vec3], sizes: &[f64], setbacks: &[(Vec3, f64)]) -> Result<super::OpenCorners> {
         let what = "fillet with open setback corners";
         body.require_brep(what)?;
         sizes_ok(what, sizes)?;
@@ -314,7 +321,7 @@ mod imp {
         let at: Vec<Vec3> = setbacks.iter().map(|(p, _)| *p).collect();
         let tol = pick_tolerance(body);
         let (sheet, holes, order) =
-            run_with(body, what, &picked.edges, &at, |b| b.blend_setback_open(blend_kind(kind), &picked.points, sizes, &corners, &distances, tol))
+            run_with(body, what, &picked.edges, &at, |b| b.blend_setback_open(Blend::Round, &picked.points, sizes, &corners, &distances, tol))
                 .map_err(|e| crate::blend::with_continuation(e, next))?;
         // SMLib's indices in the sheet's own orders.
         let place = |list: &[usize], i: usize| if list.is_empty() { Some(i) } else { list.get(i).copied() };
